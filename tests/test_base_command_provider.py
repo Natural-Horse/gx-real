@@ -10,6 +10,7 @@ sys.path.insert(0, str(ROOT / "real-wbc"))
 from modules.base_command_provider import (  # noqa: E402
     BaseCommandGate,
     CommandSafetyFilter,
+    ExternalVelocityCommandProvider,
     FixedCommandProvider,
     WirelessJoystickCommandProvider,
     handover_allows_motion,
@@ -28,6 +29,16 @@ def _open_gate():
 def test_fixed_mode_returns_configured_command():
     provider = FixedCommandProvider(0.5, 0.0, 0.1)
     assert provider.update(now=1.0).as_tuple() == (0.5, 0.0, 0.1)
+
+
+def test_external_velocity_provider_stops_on_watchdog_timeout():
+    provider = ExternalVelocityCommandProvider(watchdog_sec=0.25)
+    provider.update_external(vx=0.2, vy=-0.1, yaw_rate=0.3, stamp=1.0)
+    assert provider.update(now=1.1).as_tuple() == (0.2, -0.1, 0.3)
+    stale = provider.update(now=1.3)
+    assert stale.valid is False
+    assert stale.as_tuple() == (0.0, 0.0, 0.0)
+    assert stale.reason == "external_vla_stale"
 
 
 def test_speed_command_waits_for_policy_handover_completion():

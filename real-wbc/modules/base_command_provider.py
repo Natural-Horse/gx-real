@@ -60,6 +60,44 @@ class FixedCommandProvider:
         return BaseCommand(*self.command, stamp=stamp, source="fixed", valid=True)
 
 
+class ExternalVelocityCommandProvider:
+    """Watchdog-protected velocity sink for a local NAV waypoint adapter."""
+
+    def __init__(self, *, watchdog_sec: float = 0.25):
+        self.watchdog_sec = _positive_float(watchdog_sec, "watchdog_sec")
+        self.command = (0.0, 0.0, 0.0)
+        self.last_msg_time = -1.0
+
+    def update_external(
+        self,
+        *,
+        vx: float,
+        vy: float,
+        yaw_rate: float,
+        stamp: Optional[float] = None,
+    ) -> None:
+        self.command = (
+            _finite_float(vx, "vx"),
+            _finite_float(vy, "vy"),
+            _finite_float(yaw_rate, "yaw_rate"),
+        )
+        self.last_msg_time = time.monotonic() if stamp is None else float(stamp)
+
+    def update(self, now: Optional[float] = None) -> BaseCommand:
+        stamp = time.monotonic() if now is None else float(now)
+        if self.last_msg_time < 0.0 or stamp - self.last_msg_time > self.watchdog_sec:
+            return BaseCommand(
+                0.0,
+                0.0,
+                0.0,
+                stamp=stamp,
+                source="external_vla",
+                valid=False,
+                reason="external_vla_missing" if self.last_msg_time < 0.0 else "external_vla_stale",
+            )
+        return BaseCommand(*self.command, stamp=stamp, source="external_vla", valid=True)
+
+
 class WirelessJoystickCommandProvider:
     def __init__(
         self,
