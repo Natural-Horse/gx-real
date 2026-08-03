@@ -99,7 +99,7 @@ if __name__ == "__main__":
     parser.add_argument("--cmd-yaw", type=float, default=0.0)
     parser.add_argument(
         "--base-command-source",
-        choices=["fixed", "wireless_joystick"],
+        choices=["fixed", "wireless_joystick", "external_vla"],
         default="fixed",
     )
     parser.add_argument("--joy-vx-axis", choices=["lx", "ly", "rx", "ry"], default="ly")
@@ -118,6 +118,8 @@ if __name__ == "__main__":
     parser.add_argument("--joy-acc-yaw", type=float, default=0.6)
     parser.add_argument("--joy-watchdog-sec", type=float, default=0.25)
     parser.add_argument("--joy-dry-run", action="store_true")
+    parser.add_argument("--external-base-topic", default="/vla/base_cmd")
+    parser.add_argument("--external-base-watchdog-sec", type=float, default=0.25)
     parser.add_argument("--gripper-cmd", type=float, default=0.0)
     parser.add_argument(
         "--arm-control-owner",

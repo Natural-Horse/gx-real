@@ -29,6 +29,7 @@ from modules.arm_observation import (
 from modules.base_command_provider import (
     BaseCommandGate,
     CommandSafetyFilter,
+    ExternalVelocityCommandProvider,
     FixedCommandProvider,
     WirelessJoystickCommandProvider,
     handover_allows_motion,
@@ -327,6 +328,8 @@ class WBCNodeLeg12ArmPassthrough(Node):
         joy_acc_yaw: float = 0.6,
         joy_watchdog_sec: float = 0.25,
         joy_dry_run: bool = False,
+        external_base_topic: str = "/vla/base_cmd",
+        external_base_watchdog_sec: float = 0.25,
         gripper_cmd: float = 0.0,
         arm_control_owner: str = "external_spacemouse",
         arm_state_topic: str = "/arm/state",
@@ -517,11 +520,17 @@ class WBCNodeLeg12ArmPassthrough(Node):
         self.policy_takeover_commands = np.array([0.0, 0.0, 0.0], dtype=np.float64)
         self.policy_move_commands = np.array([cmd_vx, cmd_vy, cmd_yaw], dtype=np.float64)
         self.base_command_source = base_command_source.lower()
-        if self.base_command_source not in {"fixed", "wireless_joystick"}:
+        if self.base_command_source not in {
+            "fixed",
+            "wireless_joystick",
+            "external_vla",
+        }:
             raise ValueError(
-                "Invalid base_command_source=%r; expected fixed or wireless_joystick"
+                "Invalid base_command_source=%r; expected fixed, wireless_joystick, "
+                "or external_vla"
                 % base_command_source
             )
+        self.external_base_topic = str(external_base_topic)
         self.fixed_command_provider = FixedCommandProvider(cmd_vx, cmd_vy, cmd_yaw)
         self.wireless_command_provider = WirelessJoystickCommandProvider(
             vx_axis=joy_vx_axis,
@@ -536,6 +545,9 @@ class WBCNodeLeg12ArmPassthrough(Node):
             max_vy=joy_max_vy,
             max_yaw=joy_max_yaw,
             watchdog_sec=joy_watchdog_sec,
+        )
+        self.external_command_provider = ExternalVelocityCommandProvider(
+            watchdog_sec=external_base_watchdog_sec,
         )
         self.command_safety_filter = CommandSafetyFilter(
             acc_vx=joy_acc_vx,
@@ -803,6 +815,12 @@ class WBCNodeLeg12ArmPassthrough(Node):
             TeleopBaseCommand,
             "/teleop/base_cmd",
             self.teleop_base_cmd_cb,
+            low_state_history_depth,
+        )
+        self.external_base_cmd_sub = self.create_subscription(
+            TeleopBaseCommand,
+            self.external_base_topic,
+            self.external_vla_base_cmd_cb,
             low_state_history_depth,
         )
         self.teleop_gripper_cmd_sub = self.create_subscription(
@@ -1931,12 +1949,21 @@ class WBCNodeLeg12ArmPassthrough(Node):
                     "handover_complete",
                     self.policy_command_ramp_duration,
                 )
-            else:
+            elif self.base_command_source == "wireless_joystick":
                 logging.info(
                     "Policy handover complete; wireless base commands are now enabled"
                 )
+            else:
+                logging.info(
+                    "Policy handover complete; watchdog-protected external VLA base "
+                    "commands are now enabled on %s",
+                    self.external_base_topic,
+                )
         if self.base_command_source == "wireless_joystick":
             self.update_wireless_joystick_policy_command()
+            return
+        if self.base_command_source == "external_vla":
+            self.update_external_vla_policy_command()
             return
         if self.teleop_mode == TELEOP_MODE_BASE:
             self.update_teleop_base_command()
@@ -1998,6 +2025,37 @@ class WBCNodeLeg12ArmPassthrough(Node):
                     safe_command.reason,
                     gate,
                 )
+            )
+            self.last_joy_diag_log_time = now
+
+    def update_external_vla_policy_command(self):
+        now = time.monotonic()
+        raw_command = self.external_command_provider.update(now)
+        safe_command = self.command_safety_filter.update(
+            raw_command,
+            BaseCommandGate(
+                standup_done=self.ready_to_start_policy,
+                policy_running=self.start_policy,
+                lowlevel_align_done=not self.align_to_policy_active,
+                emergency_stop=bool(self.safety_stop_reason),
+            ),
+            now=now,
+        )
+        self.fixed_commands[:] = np.asarray(safe_command.as_tuple(), dtype=np.float64)
+        if (
+            self.last_joy_diag_log_time < 0.0
+            or (now - self.last_joy_diag_log_time) >= self.joy_diag_log_interval
+        ):
+            logging.info(
+                "External VLA base command | raw=%s safe=%s valid=%s reason=%s",
+                np.array2string(
+                    np.asarray(raw_command.as_tuple()), precision=3, floatmode="fixed"
+                ),
+                np.array2string(
+                    self.fixed_commands, precision=3, floatmode="fixed"
+                ),
+                safe_command.valid,
+                safe_command.reason,
             )
             self.last_joy_diag_log_time = now
 
@@ -2195,6 +2253,22 @@ class WBCNodeLeg12ArmPassthrough(Node):
             self.teleop_base_max_velocity,
         )
         self.teleop_base_last_time = now
+
+    def external_vla_base_cmd_cb(self, msg: TeleopBaseCommand):
+        if self.base_command_source != "external_vla":
+            return
+        values = np.asarray([msg.vx, msg.vy, msg.yaw_rate], dtype=np.float64)
+        if values.shape != (3,) or not np.isfinite(values).all():
+            self.log_invalid_teleop("external_vla_base_cmd", values)
+            return
+        if bool(msg.hold):
+            values[:] = 0.0
+        self.external_command_provider.update_external(
+            vx=float(values[0]),
+            vy=float(values[1]),
+            yaw_rate=float(values[2]),
+            stamp=time.monotonic(),
+        )
 
     def teleop_eef_delta_cb(self, msg: TeleopEEFDelta):
         if self.arm_control_owner != "wbc":

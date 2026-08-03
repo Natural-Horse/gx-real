@@ -30,6 +30,13 @@ BUTTON_HOME_MIN_DURATION_SEC = 1.0
 BUTTON_HOME_MAX_DURATION_SEC = 3.0
 X5_GRIPPER_WIDTH = 0.088
 X5_GRIPPER_OPEN_READOUT = -5.07839
+ARM2BASE = np.eye(4, dtype=np.float64)
+ARM2BASE[:3, 3] = np.array([0.085, 0.0, 0.094], dtype=np.float64)
+TCP2EE = np.eye(4, dtype=np.float64)
+TCP2EE[:3, :3] = np.array(
+    [[0.0, 0.0, 1.0], [-1.0, 0.0, 0.0], [0.0, -1.0, 0.0]],
+    dtype=np.float64,
+)
 RAW_AXIS_INDEX = {
     "x": 0,
     "y": 1,
@@ -125,6 +132,40 @@ def apply_x5_gripper_calibration(robot_config, model: str) -> bool:
     return True
 
 
+def base_tcp_pose7_to_arm_eef_pose6d(pose7: Sequence[float]) -> np.ndarray:
+    """Convert base-frame UMI TCP pose into the ARX Cartesian controller frame."""
+    pose = require_finite_vector(pose7, size=7, name="base_tcp_pose7")
+    quat = pose[3:].copy()
+    quat_norm = float(np.linalg.norm(quat))
+    if quat_norm <= 1.0e-8:
+        raise RuntimeSafetyFault("base_tcp_pose7 quaternion has near-zero norm")
+    base_tcp = np.eye(4, dtype=np.float64)
+    base_tcp[:3, 3] = pose[:3]
+    base_tcp[:3, :3] = _quat_wxyz_to_matrix(quat / quat_norm)
+    arm_ee = np.linalg.inv(ARM2BASE) @ base_tcp @ np.linalg.inv(TCP2EE)
+    return np.concatenate(
+        (
+            np.asarray(arm_ee[:3, 3], dtype=np.float64),
+            _matrix_to_rpy(arm_ee[:3, :3]),
+        )
+    )
+
+
+def arm_eef_pose6d_to_base_tcp_pose7(pose6d: Sequence[float]) -> np.ndarray:
+    pose = require_finite_vector(pose6d, size=6, name="arm_eef_pose6d")
+    arm_ee = np.eye(4, dtype=np.float64)
+    arm_ee[:3, 3] = pose[:3]
+    arm_ee[:3, :3] = _rpy_to_matrix(*pose[3:])
+    base_tcp = ARM2BASE @ arm_ee @ TCP2EE
+    roll, pitch, yaw = _matrix_to_rpy(base_tcp[:3, :3])
+    return np.concatenate(
+        (
+            np.asarray(base_tcp[:3, 3], dtype=np.float64),
+            np.asarray(_quat_from_rpy(roll, pitch, yaw), dtype=np.float64),
+        )
+    )
+
+
 class SpaceMouseArmNode:
     def __init__(
         self,
@@ -143,6 +184,9 @@ class SpaceMouseArmNode:
         arm_home_topic: str = "/arm/home",
         safety_topic: str = "/safety/estop",
         lock_training_pose: bool = False,
+        control_source: str = "spacemouse",
+        external_target_topic: str = "/vla/arm_target",
+        external_target_watchdog_sec: float = 0.25,
     ):
         import rclpy
         from rclpy.node import Node
@@ -167,6 +211,13 @@ class SpaceMouseArmNode:
         self.arm_home_topic = str(arm_home_topic)
         self.safety_topic = str(safety_topic)
         self.lock_training_pose = bool(lock_training_pose)
+        self.control_source = str(control_source).lower()
+        if self.control_source not in {"spacemouse", "external_vla"}:
+            raise ValueError("control_source must be spacemouse or external_vla")
+        self.external_target_topic = str(external_target_topic)
+        self.external_target_watchdog_sec = float(external_target_watchdog_sec)
+        if self.external_target_watchdog_sec <= 0.0:
+            raise ValueError("external_target_watchdog_sec must be positive")
         self.shared_memory_manager: Optional[SharedMemoryManager] = None
         self.spacemouse = None
         self.controller = None
@@ -189,6 +240,8 @@ class SpaceMouseArmNode:
         self.last_spacemouse_command_log_time = -1.0
         self.last_spacemouse_stale_log_time = -1.0
         self.estopped = False
+        self.last_external_target_time = -1.0
+        self.external_watchdog_holding = False
         self.last_spacemouse_button_state: Optional[np.ndarray] = None
         self.tick = 0
 
@@ -206,6 +259,14 @@ class SpaceMouseArmNode:
             self._safety_estop_cb,
             10,
         )
+        self.external_target_sub = None
+        if self.control_source == "external_vla":
+            self.external_target_sub = self.node.create_subscription(
+                ArmTargetState,
+                self.external_target_topic,
+                self._external_target_cb,
+                10,
+            )
 
         self._log_startup_config()
         self._init_inputs_and_controller()
@@ -238,6 +299,12 @@ class SpaceMouseArmNode:
         self._log_info(f"watchdog: {self.sm_watchdog_sec}")
         self._log_info(f"controlled home topic: {self.arm_home_topic}")
         self._log_info(f"safety estop topic: {self.safety_topic}")
+        self._log_info(f"arm command source: {self.control_source}")
+        if self.control_source == "external_vla":
+            self._log_info(
+                f"external VLA target: {self.external_target_topic} "
+                f"watchdog={self.external_target_watchdog_sec:.3f}s"
+            )
         if self.lock_training_pose:
             self._log_info(
                 "arm mode: fixed training-pose lock "
@@ -301,6 +368,10 @@ class SpaceMouseArmNode:
                 self._log_info("SpaceMouse input disabled while training-pose lock is active")
                 return
 
+            if self.control_source == "external_vla":
+                self._log_info("SpaceMouse input disabled; external VLA owns X5 targets")
+                return
+
             from modules.spacemouse_shared_memory import Spacemouse
             self.shared_memory_manager = SharedMemoryManager()
             self.shared_memory_manager.start()
@@ -320,7 +391,11 @@ class SpaceMouseArmNode:
         self.last_update_time = now
         self.tick += 1
 
-        if not self.estopped and not self.lock_training_pose:
+        if (
+            not self.estopped
+            and not self.lock_training_pose
+            and self.control_source == "spacemouse"
+        ):
             spacemouse_input = self._read_spacemouse_input(now=now)
         else:
             spacemouse_input = None
@@ -372,9 +447,12 @@ class SpaceMouseArmNode:
         elif (
             not self.estopped
             and not self.lock_training_pose
+            and self.control_source == "spacemouse"
             and now - self.last_spacemouse_sample_time > self.sm_watchdog_sec
         ):
             self._handle_spacemouse_watchdog()
+        if self.control_source == "external_vla" and not self.estopped:
+            self._handle_external_target_watchdog(now)
 
         joint_pos, joint_vel, joint_tau, gripper_pos, gripper_vel, arm_state_valid = self._read_arm_state()
         self._publish_arm_state(joint_pos, joint_vel, joint_tau, gripper_pos, gripper_vel, arm_state_valid)
@@ -393,6 +471,86 @@ class SpaceMouseArmNode:
         )
         self._return_home_before_damping(f"{self.arm_home_topic}=true")
         self._set_to_damping()
+
+    def _external_target_cb(self, msg) -> None:
+        if self.control_source != "external_vla" or self.estopped:
+            return
+        if not bool(getattr(msg, "valid", False)):
+            self._log_warning("Ignoring invalid external VLA arm target")
+            return
+        if str(getattr(msg, "source", "")) != "remote_vla_real_client":
+            self._log_warning("Ignoring external arm target from an unapproved source")
+            return
+        frame = str(getattr(msg, "command_frame", ""))
+        if frame != "base":
+            self._log_warning(
+                f"Ignoring external VLA arm target in frame {frame!r}; expected 'base'"
+            )
+            return
+        try:
+            base_pose = require_finite_vector(
+                msg.tcp_target_pose,
+                size=7,
+                name="external_vla.base_tcp_pose",
+            )
+            workspace_min = np.array([0.05, -0.45, -0.10], dtype=np.float64)
+            workspace_max = np.array([0.70, 0.45, 0.55], dtype=np.float64)
+            if np.any(base_pose[:3] < workspace_min) or np.any(
+                base_pose[:3] > workspace_max
+            ):
+                raise RuntimeSafetyFault(
+                    f"external VLA TCP outside base workspace: {base_pose[:3]}"
+                )
+            target_pose6d = base_tcp_pose7_to_arm_eef_pose6d(msg.tcp_target_pose)
+            target_gripper = require_finite_scalar(
+                msg.gripper_target, "external_vla.gripper_target"
+            )
+            if not self.gripper_min <= target_gripper <= self.gripper_max:
+                raise RuntimeSafetyFault(
+                    f"external VLA gripper {target_gripper:.4f} outside "
+                    f"[{self.gripper_min:.4f}, {self.gripper_max:.4f}]"
+                )
+            translation_step = float(
+                np.linalg.norm(target_pose6d[:3] - self.target_pose6d[:3])
+            )
+            rotation_step = float(
+                np.max(np.abs(_wrap_to_pi(target_pose6d[3:] - self.target_pose6d[3:])))
+            )
+            if translation_step > 0.15:
+                raise RuntimeSafetyFault(
+                    f"external VLA TCP translation step {translation_step:.3f} m exceeds 0.150 m"
+                )
+            if rotation_step > math.radians(35.0):
+                raise RuntimeSafetyFault(
+                    f"external VLA TCP rotation step {rotation_step:.3f} rad exceeds 35 deg"
+                )
+        except (RuntimeSafetyFault, ValueError) as exc:
+            self._log_warning(f"Rejected external VLA arm target: {exc}")
+            return
+        self.target_pose6d = target_pose6d
+        self.target_gripper = float(target_gripper)
+        self.last_external_target_time = time.monotonic()
+        self.external_watchdog_holding = False
+        self.last_motion_time = self.last_external_target_time
+        self._send_target()
+
+    def _handle_external_target_watchdog(self, now: float) -> None:
+        if (
+            self.last_external_target_time < 0.0
+            or now - self.last_external_target_time <= self.external_target_watchdog_sec
+            or self.external_watchdog_holding
+        ):
+            return
+        self.external_watchdog_holding = True
+        self._log_warning("External VLA arm watchdog expired; holding current X5 pose")
+        try:
+            self._refresh_targets_from_controller_state()
+            self._send_target()
+        except Exception as exc:
+            self._trigger_estop(
+                f"failed to hold after external VLA watchdog: {exc}",
+                return_home=False,
+            )
 
     def _trigger_estop(self, source: str, *, return_home: bool = False) -> None:
         if self.estopped:
@@ -902,7 +1060,8 @@ class SpaceMouseArmNode:
         msg.gripper_pos = float(gripper_pos)
         msg.gripper_vel = float(gripper_vel)
         msg.valid = bool(valid)
-        msg.source = "spacemouse_arm_node_dry_run" if self.dry_run else "spacemouse_arm_node"
+        source = "external_vla_arm_node" if self.control_source == "external_vla" else "spacemouse_arm_node"
+        msg.source = f"{source}_dry_run" if self.dry_run else source
         self.state_pub.publish(msg)
 
     def _publish_arm_target(self) -> None:
@@ -924,7 +1083,11 @@ class SpaceMouseArmNode:
             gripper_target = self._clamp_gripper(
                 require_finite_scalar(self.target_gripper, "arm_target.gripper")
             )
-            tcp_target_pose = _pose6d_to_pose7(pose6d)
+            tcp_target_pose = (
+                arm_eef_pose6d_to_base_tcp_pose7(pose6d)
+                if self.control_source == "external_vla"
+                else _pose6d_to_pose7(pose6d)
+            )
         except RuntimeSafetyFault as exc:
             self._log_error(f"Publishing invalid ArmTargetState: {exc}")
             joint_target = np.zeros(6, dtype=np.float64)
@@ -936,7 +1099,8 @@ class SpaceMouseArmNode:
         self.target_gripper = gripper_target
         msg.gripper_target = float(gripper_target)
         msg.command_frame = self.arm_command_frame
-        msg.source = "spacemouse_arm_node_dry_run" if self.dry_run else "spacemouse_arm_node"
+        source = "external_vla_arm_node" if self.control_source == "external_vla" else "spacemouse_arm_node"
+        msg.source = f"{source}_dry_run" if self.dry_run else source
         msg.valid = bool(valid)
         self.target_pub.publish(msg)
 
@@ -1004,6 +1168,44 @@ class SpaceMouseArmNode:
 
 def _wrap_to_pi(value: np.ndarray) -> np.ndarray:
     return (value + np.pi) % (2.0 * np.pi) - np.pi
+
+
+def _rpy_to_matrix(roll: float, pitch: float, yaw: float) -> np.ndarray:
+    cr, sr = math.cos(roll), math.sin(roll)
+    cp, sp = math.cos(pitch), math.sin(pitch)
+    cy, sy = math.cos(yaw), math.sin(yaw)
+    return np.array(
+        [
+            [cy * cp, cy * sp * sr - sy * cr, cy * sp * cr + sy * sr],
+            [sy * cp, sy * sp * sr + cy * cr, sy * sp * cr - cy * sr],
+            [-sp, cp * sr, cp * cr],
+        ],
+        dtype=np.float64,
+    )
+
+
+def _matrix_to_rpy(rotation: np.ndarray) -> np.ndarray:
+    matrix = np.asarray(rotation, dtype=np.float64).reshape(3, 3)
+    pitch = math.asin(float(np.clip(-matrix[2, 0], -1.0, 1.0)))
+    if abs(math.cos(pitch)) > 1.0e-8:
+        roll = math.atan2(matrix[2, 1], matrix[2, 2])
+        yaw = math.atan2(matrix[1, 0], matrix[0, 0])
+    else:
+        roll = math.atan2(-matrix[1, 2], matrix[1, 1])
+        yaw = 0.0
+    return np.array([roll, pitch, yaw], dtype=np.float64)
+
+
+def _quat_wxyz_to_matrix(quaternion: Sequence[float]) -> np.ndarray:
+    qw, qx, qy, qz = np.asarray(quaternion, dtype=np.float64).reshape(4)
+    return np.array(
+        [
+            [1 - 2 * (qy * qy + qz * qz), 2 * (qx * qy - qz * qw), 2 * (qx * qz + qy * qw)],
+            [2 * (qx * qy + qz * qw), 1 - 2 * (qx * qx + qz * qz), 2 * (qy * qz - qx * qw)],
+            [2 * (qx * qz - qy * qw), 2 * (qy * qz + qx * qw), 1 - 2 * (qx * qx + qy * qy)],
+        ],
+        dtype=np.float64,
+    )
 
 
 def _pose6d_to_pose7(pose6d: np.ndarray) -> np.ndarray:

@@ -2,7 +2,7 @@
 
 这份文档面向第一次接触本仓库的人，目标是把 `real` 目录下分散的上机、网络、硬件和策略替换说明整理成一条完整开发路径。默认部署环境是机器狗机身上的 Jetson Orin NX 开发板，路径按 `~/gx-real` 书写。当前主线不是原始 UMI-on-Legs 的完整末端轨迹控制链，而是 `Go2 + X5/ARX5` 真机上的分离控制链：WBC 主节点只写 Go2 腿部，独立 SpaceMouse Arm 节点独占 X5/ARX5。
 
-只需要执行上机步骤时，直接阅读 [真机上机使用指南](docs/上机使用指南.md)。
+只需要执行测评步骤时，直接阅读 [实机测试指南](docs/实机测试指南.md)。
 
 ## 1. 当前系统做什么
 
@@ -44,7 +44,7 @@ real/
   README.md                         # 本文档，新人入口
 
   docs/
-    上机使用指南.md                  # 真机操作细节和故障处理
+    实机测试指南.md                  # 真机基线、远程 VLA shadow 和分级放行
     height_scan_lidar_deployment.md  # Rough/高度扫描部署说明
 
   scripts/
@@ -608,7 +608,7 @@ ros2 topic echo lf/sportmodestate
 - `check_env.sh --spacemouse` 失败在 `spnav` 或 `atomics`：安装 SpaceMouse Python 依赖；失败在 `spacenavd` 或 `libspnav`：安装/启动系统服务。
 - `undefined symbol: PyCObject_AsVoidPtr`：卸载 PyPI 版 `spnav`，安装 README 中固定的 Cheng Chi fork。
 - 单独机械臂测试失败在 `Error document empty` / `Failed to get chain from kdl tree`：ARX5 Python 扩展可能从 pip 安装目录加载，默认找不到仓库里的 URDF。更新到最新代码后，`scripts/run_arm_spacemouse_test.sh` 会显式把 `arx5-sdk/models` 传给示例。
-- `Gripper position error: got -0.08x but should be in 0~0.088`：这是部分新款 X5 夹爪电机安装方向与 SDK 默认符号相反导致的已知校准问题。当前 `run_spacemouse_arm.sh --model X5` 会在创建 controller 前固定写入 `gripper_width=0.088`、`gripper_open_readout=-5.07839`；启动日志必须出现 `Using persistent X5 gripper calibration`。SDK 校准程序即使打印正的 fully-open readout，也可能需要按电机方向写成负值，不能无条件照抄正号。详见 [真机指南的 ARX 零点说明](docs/上机使用指南.md#7-arx-sdk-夹爪零点校准的可能-bug)。
+- `Gripper position error: got -0.08x but should be in 0~0.088`：这是部分新款 X5 夹爪电机安装方向与 SDK 默认符号相反导致的已知校准问题。当前 `run_spacemouse_arm.sh --model X5` 会在创建 controller 前固定写入 `gripper_width=0.088`、`gripper_open_readout=-5.07839`；启动日志必须出现 `Using persistent X5 gripper calibration`。SDK 校准程序即使打印正的 fully-open readout，也可能需要按电机方向写成负值，不能无条件照抄正号。详见 [实机测试指南](docs/实机测试指南.md)。
 - `/usr/bin/python3 -m pip show arx5-interface` 显示 `Package(s) not found`，但 `import arx5_interface` 成功：当前扩展可能是直接放在 `~/.local/lib/python3.8/site-packages` 的 `.so`，没有 pip metadata；以 `arx5_interface.__file__` 为准。
 - `Background send_recv task is running too slow`：这是 ARX5 SDK 的 DEBUG 级通信周期提示。偶发 `2-4 ms` 且机械臂运动平滑、无 `warning/error` 时可以忽略；默认日志级别已改为 `info`，需要排查底层周期时再加 `--log-level debug`。
 - `Inverse kinematics failed: E_EXCEED_JOINT_LIMIT` 或 `Over current detected`：目标末端位姿太快或太远，已经触到 IK/关节/电流保护。立即松开 SpaceMouse 或 `Ctrl+C` 停止；必要时临时降低速度 `--pos-speed 0.03 --ori-speed 0.10`，或加 home 附近工作空间限制。
@@ -668,7 +668,7 @@ ros2 topic echo lf/sportmodestate
 
 ## 14. 参考文档
 
-- [上机使用指南](docs/上机使用指南.md)：当前 main/Flat 真机操作、L1 停机和 ARX 零点说明。
+- [实机测试指南](docs/实机测试指南.md)：底层基线、远程 VLA shadow、分级放行和故障处理。
 - [LiDAR/height scan 部署](docs/height_scan_lidar_deployment.md)：Rough 感知链部署说明。
 - [real-wbc 开发文档索引](real-wbc/docs/README.md)：硬件、网络、装配和开发环境细分说明。
 - [网络与通信配置](real-wbc/docs/network.md)：Go2 网络、ROS2、MCF 和 `can0`。

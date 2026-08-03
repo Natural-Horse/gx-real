@@ -1,4 +1,6 @@
 doc/
+!doc/
+!doc/实机测试指南.md
 policies/*
 !policies/
 !policies/env.yaml

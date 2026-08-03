@@ -9,7 +9,7 @@ scripts/run_leg12_real.sh
   -> policies/policy.onnx + policies/env.yaml
 ```
 
-上机操作以仓库根目录下的 [上机使用指南](../../doc/上机使用指南.md) 为准；本目录主要解释开发环境、网络、硬件和历史链路。
+上机操作以仓库根目录下的 [实机测试指南](../../docs/实机测试指南.md) 为准；本目录主要解释开发环境、网络、硬件和历史链路。
 
 ## 文档划分
 
@@ -39,7 +39,7 @@ scripts/run_leg12_real.sh
 
 ## 修改文档时的约定
 
-- 上机命令和故障处理优先更新 [上机使用指南](../../doc/上机使用指南.md)。
+- 上机命令和故障处理优先更新 [实机测试指南](../../docs/实机测试指南.md)。
 - 开发环境和代码入口说明更新 [codebase_setup.md](codebase_setup.md)。
 - 硬件接线、CAN、电源问题更新 [assembly.md](assembly.md) 或 [network.md](network.md)。
 - 不要在文档里写本机绝对路径，除非是机器人上固定路径，例如 `~/gx-real`。

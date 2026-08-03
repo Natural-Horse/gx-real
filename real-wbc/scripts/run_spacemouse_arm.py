@@ -33,6 +33,13 @@ def parse_args():
     parser.add_argument("--can-interface", default="can0")
     parser.add_argument("--arm-home-topic", default="/arm/home")
     parser.add_argument("--safety-topic", default="/safety/estop")
+    parser.add_argument(
+        "--control-source",
+        choices=["spacemouse", "external_vla"],
+        default="spacemouse",
+    )
+    parser.add_argument("--external-target-topic", default="/vla/arm_target")
+    parser.add_argument("--external-target-watchdog-sec", type=float, default=0.25)
     parser.add_argument("--ctrl-freq", type=float, default=50.0)
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--allow-missing-can", action="store_true")
@@ -119,6 +126,9 @@ def main() -> int:
         dry_run=args.dry_run,
         require_can=not args.allow_missing_can,
         lock_training_pose=args.lock_training_pose,
+        control_source=args.control_source,
+        external_target_topic=args.external_target_topic,
+        external_target_watchdog_sec=args.external_target_watchdog_sec,
     )
     try:
         rclpy.spin(node.node)
