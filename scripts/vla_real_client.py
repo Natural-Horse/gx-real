@@ -8,6 +8,7 @@ import base64
 from dataclasses import asdict
 from datetime import datetime, timezone
 import json
+import numpy as np
 from pathlib import Path
 import sys
 from threading import Lock, Thread
@@ -19,12 +20,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "real-wbc"))
 
 from modules.vla_remote_protocol import VLARemoteClient, VLARemoteClientConfig
+from modules.base_command_provider import BaseCommand
 from modules.vla_safety_adapters import (
     ArmTargetSafetyGate,
     WaypointVelocityAdapter,
     model_arm_target_to_pose7,
     pose7_to_model_arm_target,
 )
+from modules.waypoint_adapter import WaypointAdapter, WaypointAdapterConfig
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -40,6 +43,14 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--base-command-topic", default="/vla/base_cmd")
     parser.add_argument("--arm-command-topic", default="/vla/arm_target")
     parser.add_argument("--infer-hz", type=float, default=2.0)
+    parser.add_argument(
+        "--nav-anchor-mode",
+        choices=("body", "odom"),
+        default="body",
+        help="body: 单点 body-frame 比例速度（无需里程计）；odom: 世界系锚定 waypoint 跟踪，需要 --odom-topic。",
+    )
+    parser.add_argument("--odom-topic", default="/odom")
+    parser.add_argument("--odom-timeout-s", type=float, default=0.5)
     parser.add_argument("--image-timeout-s", type=float, default=0.75)
     parser.add_argument("--decision-watchdog-s", type=float, default=0.75)
     parser.add_argument("--response-timeout-s", type=float, default=120.0)
@@ -82,7 +93,13 @@ class RemoteVLARealNode:
                 response_timeout_s=args.response_timeout_s,
             )
         )
+        self.nav_anchor_mode = args.nav_anchor_mode
+        self.odom_topic = args.odom_topic
+        self.odom_timeout_s = args.odom_timeout_s
         self.nav_adapter = WaypointVelocityAdapter()
+        self.anchored_nav_adapter = WaypointAdapter()
+        self.odom_xyyaw: Optional[Tuple[float, float, float]] = None
+        self.odom_last_time = -1.0
         self.arm_gate = ArmTargetSafetyGate()
         self.lock = Lock()
         self.images: Dict[str, Tuple[bytes, float]] = {}
@@ -118,6 +135,18 @@ class RemoteVLARealNode:
             self._arm_target_state_cb,
             10,
         )
+        if self.nav_anchor_mode == "odom":
+            from nav_msgs.msg import Odometry
+            from scipy.spatial.transform import Rotation
+
+            self.Odometry = Odometry
+            self.Rotation = Rotation
+            self.node.create_subscription(
+                Odometry,
+                self.odom_topic,
+                self._odom_cb,
+                10,
+            )
         self.node.create_timer(1.0 / args.infer_hz, self._start_inference)
         self.node.create_timer(0.05, self._watchdog)
 
@@ -148,6 +177,19 @@ class RemoteVLARealNode:
             return
         with self.lock:
             self.current_arm_target = target
+
+    def _odom_cb(self, msg) -> None:
+        q = msg.pose.pose.orientation
+        quat = [q.x, q.y, q.z, q.w]
+        roll, pitch, yaw = self.Rotation.from_quat(quat).as_euler("xyz")
+        _ = roll, pitch
+        with self.lock:
+            self.odom_xyyaw = (
+                float(msg.pose.pose.position.x),
+                float(msg.pose.pose.position.y),
+                float(yaw),
+            )
+            self.odom_last_time = time.monotonic()
 
     def _start_inference(self) -> None:
         now = time.monotonic()
@@ -237,10 +279,36 @@ class RemoteVLARealNode:
         if decision.route == "nav":
             if not decision.nav_waypoints:
                 raise ValueError("NAV decision has no waypoint")
-            proposal = self.nav_adapter.compute(
-                decision.nav_waypoints[0],
-                stamp=time.monotonic(),
-            )
+            if self.nav_anchor_mode == "odom":
+                with self.lock:
+                    odom = self.odom_xyyaw
+                    odom_time = self.odom_last_time
+                if odom is None or time.monotonic() - odom_time > self.odom_timeout_s:
+                    raise ValueError("odom unavailable or stale; refusing anchored NAV command")
+                waypoints = np.asarray(decision.nav_waypoints, dtype=np.float64)
+                self.anchored_nav_adapter.set_waypoints(waypoints, np.asarray(odom))
+                command = self.anchored_nav_adapter.compute_command(
+                    np.asarray(odom),
+                    dt_s=1.0 / self.args.infer_hz,
+                )
+                proposal = type(
+                    "NavProposal",
+                    (),
+                    {
+                        "command": BaseCommand(
+                            vx=float(command[0]),
+                            vy=float(command[1]),
+                            yaw_rate=float(command[2]),
+                            stamp=time.monotonic(),
+                            source="vla_anchored_waypoint_adapter",
+                        )
+                    },
+                )()
+            else:
+                proposal = self.nav_adapter.compute(
+                    decision.nav_waypoints[0],
+                    stamp=time.monotonic(),
+                )
             outputs["nav"] = asdict(proposal.command)
             if self.live:
                 self._publish_base(
