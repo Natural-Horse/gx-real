@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 实机 VLA 全链路启动：工作站建隧道，robodog 上起腿部 WBC、X5 机械臂和交互 client。
+# 实机 VLA 全链路：在 robodog 本机启动腿部 WBC、X5 机械臂和交互 client。
 #
-# 用法（在工作站执行）：
+# 用法（登录到 robodog 后执行）：
+#   cd ~/gx-real
 #   bash scripts/run_vla_real_all.sh --config configs/vla_eval/real_go2_x5.yaml start
 #   bash scripts/run_vla_real_all.sh --config configs/vla_eval/real_go2_x5.yaml stop
+#   bash scripts/run_vla_real_all.sh --config configs/vla_eval/real_go2_x5.yaml check
 #
-# 注意：涉及真机启动、CAN、ROS 节点，执行前必须先按 docs/实机测试指南.md 完成
-# 前检，并确认服务器与机器狗空闲。
+# 注意：本脚本在 robodog 本机运行，只负责三个 ROS/CAN 进程。
+# SSH 隧道在工作站单独启动（见 docs/vla_real_client.md 第 4 节），
+# 推理服务在 GPU 服务器单独启动（starVLA_sc）。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -42,118 +45,60 @@ CONFIG_PATH="$(cd "$(dirname "${CONFIG}")" && pwd)/$(basename "${CONFIG}")"
   exit 2
 }
 
-get_cfg() {
-  python3 - "${CONFIG_PATH}" "$1" <<'PYEOF'
-import sys
-try:
-    import yaml
-except ImportError:
-    yaml = None
-path, key = sys.argv[1], sys.argv[2]
-if yaml is None:
-    sys.exit(1)
-with open(path, encoding="utf-8") as f:
-    data = yaml.safe_load(f) or {}
-node = data
-for part in key.split("."):
-    if not isinstance(node, dict) or part not in node:
-        sys.exit(1)
-    node = node[part]
-if node is None:
-    sys.exit(1)
-if isinstance(node, bool):
-    print("true" if node else "false")
-else:
-    print(str(node))
-PYEOF
+# 上机前检查（robodog 本机）：参考 README 第 5 节
+preflight() {
+  echo "[vla] 上机前检查..."
+  [[ "$(uname -m)" == "aarch64" ]] || {
+    echo "FAIL: 必须在 Jetson (aarch64) 上运行" >&2
+    exit 1
+  }
+  source "${ROOT}/scripts/setup_env.sh"
+  "${ROOT}/scripts/check_env.sh" || {
+    echo "FAIL: check_env.sh 未通过" >&2
+    exit 1
+  }
+  if ! ip -details link show can0 2>/dev/null | grep -q "state UP"; then
+    echo "WARN: can0 未 UP，尝试 setup_arx_can.sh"
+    "${ROOT}/scripts/setup_arx_can.sh"
+    ip -details link show can0
+  fi
+  echo "[vla] 上机前检查通过"
 }
-
-ENDPOINT="$(get_cfg server.endpoint || true)"
-SERVER_SSH="$(get_cfg deploy.server_ssh || true)"
-ROBOT_SSH="$(get_cfg deploy.robot_ssh || true)"
-FRONT_TOPIC="$(get_cfg real.front_topic || true)"
-WRIST_TOPIC="$(get_cfg real.wrist_topic || true)"
-INSTRUCTION="$(get_cfg task.instruction || true)"
-EPISODE_ID="$(get_cfg task.episode_id || true)"
-MODE="$(get_cfg real.mode || true)"
-JSONL_OUT="$(get_cfg interactive.jsonl_out || true)"
-TMUX_SESSION="$(get_cfg deploy.tmux_session || true)"
-
-TMUX_SESSION="${TMUX_SESSION:-vla_real_all}"
-MODE="${MODE:-shadow}"
 
 case "${ACTION}" in
   start)
-    # 0) 上机前检查（robodog 上自动执行；任一项失败即中止，不进入 rollout）
-    if [[ -n "${ROBOT_SSH}" ]]; then
-      echo "[vla] 在 ${ROBOT_SSH} 执行上机前检查..."
-      ssh -o BatchMode=yes "${ROBOT_SSH}" \
-        'bash -s' <<'REMOTE_CHECK'
-set -euo pipefail
-cd ~/gx-real
-source scripts/setup_env.sh
-echo "uname=$(uname -m) python=$(command -v python3) GX_REAL_PYTHON_BIN=${GX_REAL_PYTHON_BIN:-}"
-[[ "$(uname -m)" == "aarch64" ]] || { echo "FAIL: 必须在 Jetson (aarch64) 上运行" >&2; exit 1; }
-scripts/check_env.sh || { echo "FAIL: check_env.sh 未通过" >&2; exit 1; }
-if ! ip -details link show can0 2>/dev/null | grep -q "state UP"; then
-  echo "WARN: can0 未 UP，尝试 setup_arx_can.sh"
-  scripts/setup_arx_can.sh
-  ip -details link show can0
-fi
-echo "REMOTE_CHECK_OK"
-REMOTE_CHECK
-    else
-      echo "[vla] 未配置 robot_ssh，跳过远端上机前检查（请手工执行 README 第 5 节）。"
-    fi
+    preflight
 
-    # 1) 工作站建立双跳隧道（server -> 工作站 -> robodog）
-    if [[ -n "${SERVER_SSH}" && -n "${ROBOT_SSH}" ]]; then
-      "${SCRIPT_DIR}/evaluation/manage_remote_vla_tunnel.sh" start "${SERVER_SSH}" "${ROBOT_SSH}"
-    else
-      echo "[vla] 未配置 server_ssh/robot_ssh，跳过隧道（请确认端口已转发）。"
-    fi
+    # 腿部 WBC（external_vla 速度源）
+    tmux kill-session -t vla_leg 2>/dev/null || true
+    tmux new-session -d -s vla_leg \
+      "cd ${ROOT} && source scripts/setup_env.sh && \
+       bash scripts/run_vla_leg12_real.sh 2>&1 | tee logs/vla_leg.log"
 
-    # 2) robodog 上启动腿部 WBC（external_vla 速度源）
-    if [[ -n "${ROBOT_SSH}" ]]; then
-      ssh -o BatchMode=yes "${ROBOT_SSH}" \
-        "tmux kill-session -t ${TMUX_SESSION}_leg 2>/dev/null || true; \
-         tmux new-session -d -s ${TMUX_SESSION}_leg 'bash -lc \"cd ~/gx-real && source scripts/setup_env.sh && bash scripts/run_vla_leg12_real.sh 2>&1 | tee logs/vla_leg_${TMUX_SESSION}.log\"'"
-      # 3) X5 机械臂（唯一 CAN owner，external_vla 源）
-      ssh -o BatchMode=yes "${ROBOT_SSH}" \
-        "tmux kill-session -t ${TMUX_SESSION}_arm 2>/dev/null || true; \
-         tmux new-session -d -s ${TMUX_SESSION}_arm 'bash -lc \"cd ~/gx-real && source scripts/setup_env.sh && bash scripts/run_vla_arm_real.sh 2>&1 | tee logs/vla_arm_${TMUX_SESSION}.log\"'"
-    fi
+    # X5 机械臂（唯一 CAN owner，external_vla 源）
+    tmux kill-session -t vla_arm 2>/dev/null || true
+    tmux new-session -d -s vla_arm \
+      "cd ${ROOT} && source scripts/setup_env.sh && \
+       bash scripts/run_vla_arm_real.sh 2>&1 | tee logs/vla_arm.log"
 
-    # 4) 交互 client（robodog 上，连接本机回环 ws://127.0.0.1:10093）
-    if [[ -n "${ROBOT_SSH}" ]]; then
-      ssh -o BatchMode=yes "${ROBOT_SSH}" \
-        "tmux kill-session -t ${TMUX_SESSION}_client 2>/dev/null || true; \
-         tmux new-session -d -s ${TMUX_SESSION}_client 'bash -lc \"cd ~/gx-real && python3 scripts/run_vla_real_interactive.py --config ${CONFIG_PATH} 2>&1 | tee logs/vla_client_${TMUX_SESSION}.log\"'"
-    else
-      echo "[vla] 未配置 robot_ssh，改为在本机启动 client"
-      python3 "${SCRIPT_DIR}/run_vla_real_interactive.py" --config "${CONFIG_PATH}"
-    fi
-    echo "[vla] 已启动: ${TMUX_SESSION} (leg/arm/client)"
+    # 交互 client（连接本机回环 ws://127.0.0.1:10093，经工作站隧道到服务器）
+    tmux kill-session -t vla_client 2>/dev/null || true
+    tmux new-session -d -s vla_client \
+      "cd ${ROOT} && source scripts/setup_env.sh && \
+       ${ROOT}/scripts/run_vla_real_interactive.py --config ${CONFIG_PATH} \
+       2>&1 | tee logs/vla_client.log"
+
+    echo "[vla] 已启动: vla_leg / vla_arm / vla_client"
+    echo "[vla] 各 tmux 日志: ~/gx-real/logs/vla_{leg,arm,client}.log"
+    echo "[vla] 记得在工作站已执行隧道: manage_remote_vla_tunnel.sh start"
     ;;
   stop)
-    if [[ -n "${ROBOT_SSH}" ]]; then
-      for name in client arm leg; do
-        ssh -o BatchMode=yes "${ROBOT_SSH}" \
-          "tmux kill-session -t ${TMUX_SESSION}_${name} 2>/dev/null || true"
-      done
-    fi
-    if [[ -n "${SERVER_SSH}" && -n "${ROBOT_SSH}" ]]; then
-      "${SCRIPT_DIR}/evaluation/manage_remote_vla_tunnel.sh" stop "${SERVER_SSH}" "${ROBOT_SSH}"
-    fi
-    echo "[vla] 已停止: ${TMUX_SESSION}"
+    for name in client arm leg; do
+      tmux kill-session -t "vla_${name}" 2>/dev/null || true
+    done
+    echo "[vla] 已停止 vla_leg / vla_arm / vla_client"
     ;;
   check)
-    if [[ -n "${SERVER_SSH}" && -n "${ROBOT_SSH}" ]]; then
-      "${SCRIPT_DIR}/evaluation/manage_remote_vla_tunnel.sh" check "${SERVER_SSH}" "${ROBOT_SSH}"
-    fi
-    if [[ -n "${ROBOT_SSH}" ]]; then
-      ssh -o BatchMode=yes "${ROBOT_SSH}" \
-        "tmux ls | grep ${TMUX_SESSION} || true"
-    fi
+    tmux ls | grep vla_ || echo "[vla] 没有 vla_* 会话"
     ;;
 esac

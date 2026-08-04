@@ -1,8 +1,18 @@
 # 实机 VLA 交互 Client 启动指南
 
 本文描述如何在真机（Go2 + X5）上启动远程 StarVLA 交互 client 及配套服务
-（腿部 WBC、机械臂 CAN owner、SSH 双跳隧道）。所有参数集中在 YAML，
+（腿部 WBC、机械臂 CAN owner）。所有参数集中在 YAML，在 robodog 本机
 一条命令启动/停止。
+
+链路跨三台机器，**各机器分别登录、分别启动**：
+
+```text
+GPU 服务器 (starVLA_sc)        工作站                         robodog (gx-real)
+  推理服务 127.0.0.1:10093  <-SSH 本地转发->   <-SSH 反向隧道->   client 连 127.0.0.1:10093
+  登录服务器启动               登录工作站建隧道                 登录 robodog 启动 leg/arm/client
+```
+
+robodog 没有默认路由，隧道必须由工作站主动发起；除此之外三个进程组各自独立。
 
 ## 1. 配置（YAML）
 
@@ -13,11 +23,6 @@ server:
   endpoint: ws://127.0.0.1:10093
   connect_timeout_s: 10.0
   response_timeout_s: 120.0
-
-deploy:
-  server_ssh: zju-server
-  robot_ssh: robodog
-  tmux_session: vla_real_all
 
 task:
   instruction: "Pick up the coke can on box1 and place it on box2."
@@ -54,20 +59,20 @@ interactive:
 
 关键项：
 
-- `deploy.server_ssh` / `deploy.robot_ssh`：工作站 SSH alias，用于自动建隧道与
-  在 robodog 上起 tmux；置空则跳过自动部署；
 - `real.mode`：`shadow`（只记录不发布）/ `live`（需同时置
   `enable_live_output=true` 与 `confirm_live_output=I_UNDERSTAND_LIVE_OUTPUT`）；
 - `real.nav_anchor_mode`：`body`（无里程计，比例速度）/ `odom`（世界系锚定，
   需要 `/odom` 话题）；
 - `interactive.*`：NAV 容差、人工门控提示、JSONL。
 
-## 2. 启动前提
+## 2. 启动前提（三台机器分别准备）
 
-1. 推理服务已启动（见 `starVLA_sc/docs/vla_remote_inference_server.md`）；
-2. 工作站可 SSH 到 `deploy.server_ssh` 与 `deploy.robot_ssh`（robodog 需公钥免密）；
-3. robodog 已 source ROS 环境，front/wrist 相机发布 JPEG，X5 供电、`can0` 就绪；
-4. 已按 `docs/实机测试指南.md` 完成必要前检，操作者握住手柄与急停。
+1. **GPU 服务器**：推理服务已启动（见
+   `starVLA_sc/docs/vla_remote_inference_server.md`），监听 `127.0.0.1:10093`；
+2. **工作站**：可 SSH 到服务器与 robodog（robodog 需公钥免密），并已配好
+   `manage_remote_vla_tunnel.sh`；
+3. **robodog**：仓库位于 `~/gx-real`，front/wrist 相机发布 JPEG，X5 供电、
+   `can0` 就绪；已按 `docs/实机测试指南.md` 完成必要前检，操作者握住手柄与急停。
 
 ## 3. 上机前检查（参考 README 第 5 节）
 
@@ -141,21 +146,42 @@ X5 只允许一个写控制进程打开 `can0`。不要同时运行
 `arx5-sdk/python/examples/spacemouse_teleop.py`、
 `scripts/run_arm_spacemouse_test.sh` 或 WBC legacy arm write 模式。
 
-## 4. 启动
+## 4. 启动（按顺序在对应机器执行）
 
-在工作站执行：
+### 4.1 GPU 服务器：启动推理服务
+
+```bash
+ssh zju-server
+cd /hdd4/MaTianran/pct_workspace/starVLA_sc
+bash scripts/evaluation/start_vla_inference.sh --config configs/vla_eval/server.yaml
+```
+
+### 4.2 工作站：建立双跳隧道
 
 ```bash
 cd /home/natural/Desktop/mtr/gx-real
+scripts/evaluation/manage_remote_vla_tunnel.sh start zju-server robodog
+scripts/evaluation/manage_remote_vla_tunnel.sh check zju-server robodog
+```
+
+链路：`robodog 127.0.0.1:10093 -> 工作站 10094 -> 服务器 127.0.0.1:10093`。
+robodog 无需出网，隧道由工作站主动发起。
+
+### 4.3 robodog：启动腿部 / 机械臂 / 交互 client
+
+```bash
+ssh robodog
+cd ~/gx-real
 bash scripts/run_vla_real_all.sh --config configs/vla_eval/real_go2_x5.yaml start
 ```
 
 该命令会：
 
-1. 建立双跳 SSH 隧道（`robodog 127.0.0.1:10093 -> 工作站 -> 服务器`）；
-2. 在 robodog 的 tmux 中启动腿部 WBC（`run_vla_leg12_real.sh`）；
-3. 在 robodog 的 tmux 中启动 X5 机械臂 CAN owner（`run_vla_arm_real.sh`）；
-4. 在 robodog 的 tmux 中启动交互 client（`run_vla_real_interactive.py`）。
+1. 在 robodog 上做上机前检查（`check_env.sh`、`can0` UP 等，任一失败即中止）；
+2. 在 tmux 中启动腿部 WBC（`run_vla_leg12_real.sh`）；
+3. 在 tmux 中启动 X5 机械臂 CAN owner（`run_vla_arm_real.sh`）；
+4. 在 tmux 中启动交互 client（`run_vla_real_interactive.py`，连接本机回环
+   `ws://127.0.0.1:10093`，经工作站隧道到服务器）。
 
 之后按实机指南用 `R1` 起身、确认臂状态后用 `L2` 进入 policy；NAV 只执行第一个
 waypoint 后请求下一次推理；收到 GRASP/PLACE 时终端阻塞，输入 `1` 执行、`0` 跳过。
@@ -164,17 +190,19 @@ waypoint 后请求下一次推理；收到 GRASP/PLACE 时终端阻塞，输入 
 
 ```bash
 bash scripts/run_vla_real_all.sh --config configs/vla_eval/real_go2_x5.yaml check
-ssh robodog 'tmux ls'
+tmux ls
 ```
 
 ## 5. 停止
 
 ```bash
-bash scripts/run_vla_real_all.sh --config configs/vla_eval/real_go2_x5.yaml stop
+ssh robodog 'cd ~/gx-real && bash scripts/run_vla_real_all.sh --config configs/vla_eval/real_go2_x5.yaml stop'
+cd /home/natural/Desktop/mtr/gx-real
+scripts/evaluation/manage_remote_vla_tunnel.sh stop zju-server robodog
 ```
 
 正常收尾顺序：先停止 client，对 WBC 按 `L1` 等待零速/趴下/`/arm/home`，再停机械臂，
-最后关闭隧道。
+最后在工作站关闭隧道、停服务器推理服务。
 
 ## 6. 安全边界
 
