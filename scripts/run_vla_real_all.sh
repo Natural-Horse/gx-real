@@ -84,6 +84,28 @@ MODE="${MODE:-shadow}"
 
 case "${ACTION}" in
   start)
+    # 0) 上机前检查（robodog 上自动执行；任一项失败即中止，不进入 rollout）
+    if [[ -n "${ROBOT_SSH}" ]]; then
+      echo "[vla] 在 ${ROBOT_SSH} 执行上机前检查..."
+      ssh -o BatchMode=yes "${ROBOT_SSH}" \
+        'bash -s' <<'REMOTE_CHECK'
+set -euo pipefail
+cd ~/gx-real
+source scripts/setup_env.sh
+echo "uname=$(uname -m) python=$(command -v python3) GX_REAL_PYTHON_BIN=${GX_REAL_PYTHON_BIN:-}"
+[[ "$(uname -m)" == "aarch64" ]] || { echo "FAIL: 必须在 Jetson (aarch64) 上运行" >&2; exit 1; }
+scripts/check_env.sh || { echo "FAIL: check_env.sh 未通过" >&2; exit 1; }
+if ! ip -details link show can0 2>/dev/null | grep -q "state UP"; then
+  echo "WARN: can0 未 UP，尝试 setup_arx_can.sh"
+  scripts/setup_arx_can.sh
+  ip -details link show can0
+fi
+echo "REMOTE_CHECK_OK"
+REMOTE_CHECK
+    else
+      echo "[vla] 未配置 robot_ssh，跳过远端上机前检查（请手工执行 README 第 5 节）。"
+    fi
+
     # 1) 工作站建立双跳隧道（server -> 工作站 -> robodog）
     if [[ -n "${SERVER_SSH}" && -n "${ROBOT_SSH}" ]]; then
       "${SCRIPT_DIR}/evaluation/manage_remote_vla_tunnel.sh" start "${SERVER_SSH}" "${ROBOT_SSH}"

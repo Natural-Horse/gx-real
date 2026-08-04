@@ -69,7 +69,79 @@ interactive:
 3. robodog 已 source ROS 环境，front/wrist 相机发布 JPEG，X5 供电、`can0` 就绪；
 4. 已按 `docs/实机测试指南.md` 完成必要前检，操作者握住手柄与急停。
 
-## 3. 启动
+## 3. 上机前检查（参考 README 第 5 节）
+
+真机启动前必须在 Jetson 上完成以下检查，全部通过后再进入 VLA 链路。任何一项失败
+都要先修复，不要继续 rollout。
+
+### 3.1 环境预检
+
+```bash
+conda deactivate
+cd ~/gx-real
+git pull                       # robodog 无 GitHub 访问，改为 rsync/bundle 同步
+source scripts/setup_env.sh
+scripts/check_env.sh           # 通过时输出 [gx-real] python imports OK
+```
+
+若使用 SpaceMouse 辅助，再加：
+
+```bash
+scripts/check_env.sh --spacemouse
+```
+
+确认确实在 Jetson 上，且 Python 是系统解释器：
+
+```bash
+uname -m                       # 应为 aarch64
+which python3
+echo "${GX_REAL_PYTHON_BIN}"   # 应为 /usr/bin/python3
+```
+
+### 3.2 Go2 网络与 ROS2 topic
+
+```bash
+ip a
+ip route
+ros2 topic list
+ros2 topic echo /lowstate --once
+ros2 topic echo /wirelesscontroller --once
+ros2 topic echo lf/sportmodestate --once
+```
+
+这些 topic 必须有数据；没有数据先修网络与 CycloneDDS，不要进入低层 rollout。
+
+### 3.3 SocketCAN 与 MCF 释放
+
+```bash
+ip -details link show can0
+```
+
+没有 `can0` 或不是 `UP` 时：
+
+```bash
+scripts/setup_arx_can.sh
+ip -details link show can0
+```
+
+释放 Go2 MCF（`eth0` 换成 Jetson 实际连 Go2 的网卡，可用 `ip a` 找
+`192.168.123.xxx` 所在接口）：
+
+```bash
+scripts/disable_sports_mode_go2.sh eth0
+```
+
+该工具会用 `CheckMode()` 检查 motion mode、`ReleaseMode()` 后再次验证；任何 SDK
+错误或仍有活动模式都会失败。不要绕过这一步，否则 Go2 原厂高层控制会和低层
+`lowcmd` 抢控制权。
+
+### 3.4 CAN owner 唯一性
+
+X5 只允许一个写控制进程打开 `can0`。不要同时运行
+`arx5-sdk/python/examples/spacemouse_teleop.py`、
+`scripts/run_arm_spacemouse_test.sh` 或 WBC legacy arm write 模式。
+
+## 4. 启动
 
 在工作站执行：
 
@@ -95,7 +167,7 @@ bash scripts/run_vla_real_all.sh --config configs/vla_eval/real_go2_x5.yaml chec
 ssh robodog 'tmux ls'
 ```
 
-## 4. 停止
+## 5. 停止
 
 ```bash
 bash scripts/run_vla_real_all.sh --config configs/vla_eval/real_go2_x5.yaml stop
@@ -104,7 +176,7 @@ bash scripts/run_vla_real_all.sh --config configs/vla_eval/real_go2_x5.yaml stop
 正常收尾顺序：先停止 client，对 WBC 按 `L1` 等待零速/趴下/`/arm/home`，再停机械臂，
 最后关闭隧道。
 
-## 5. 安全边界
+## 6. 安全边界
 
 - 远程 client 不打开 CAN，不替换 `policies/policy.onnx`；
 - X5 只有一个 CAN owner（`run_vla_arm_real.sh`）；
