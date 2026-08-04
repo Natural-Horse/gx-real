@@ -126,6 +126,8 @@ class InteractiveRealClient:
         self.phase = "nav_pick"
         self.frame_index = 0
         self.replan_count = 0
+        self.locked_route: str | None = None
+        self.locked_subtask: str | None = None
         self.log_path = Path(
             str(self.interactive_cfg.get("jsonl_out", "logs/vla_eval/real_interactive.jsonl"))
         )
@@ -241,7 +243,7 @@ class InteractiveRealClient:
                 "encoding": "jpeg_base64",
                 "data": base64.b64encode(raw[0]).decode("ascii"),
             }
-        return {
+        payload = {
             "episode_id": self.episode_id,
             "frame_index": frame_index,
             "phase": phase,
@@ -256,6 +258,10 @@ class InteractiveRealClient:
                 ),
             },
         }
+        if self.locked_route is not None:
+            payload["locked_route"] = self.locked_route
+            payload["locked_subtask"] = self.locked_subtask or ""
+        return payload
 
     def _interactive_loop(self) -> dict[str, Any]:
         records: list[dict[str, Any]] = []
@@ -270,15 +276,27 @@ class InteractiveRealClient:
             decision = self.client.infer(payload)
             elapsed_ms = round((time.perf_counter() - started) * 1000.0, 3)
             route = str(decision.route)
+            subtask = decision.subtask
+            if (
+                self.locked_route is not None
+                and route == self.locked_route
+                and (subtask or "") == (self.locked_subtask or "")
+            ):
+                route = self.locked_route
+                subtask = self.locked_subtask
+            elif route in {"nav", "grasp", "place"}:
+                self.locked_route = route
+                self.locked_subtask = str(subtask).strip() if subtask else ""
             record = {
                 "frame_index": self.frame_index,
                 "phase": self.phase,
                 "route": route,
-                "subtask": decision.subtask,
+                "subtask": subtask,
                 "nav_waypoints": [list(p) for p in decision.nav_waypoints],
                 "arm_targets_base": [list(t) for t in decision.arm_targets_base],
                 "raw_text": decision.raw_text,
                 "timing_ms": elapsed_ms,
+                "locked_action": self.locked_route is not None,
             }
             records.append(record)
             self._print_decision(record)
@@ -427,6 +445,7 @@ class InteractiveRealClient:
         choice = self._ask_number(prompt)
         if choice != 1:
             print(f"[vla] {route} skipped by operator", flush=True)
+            self.unlock()
             self._append_jsonl(
                 {
                     "event": "arm_gate",
@@ -436,6 +455,7 @@ class InteractiveRealClient:
                 }
             )
             return
+        self.unlock()
         if str(self.real_cfg.get("mode", "shadow")) != "live":
             print(f"[vla] {route} shadow: target recorded, not published", flush=True)
             self._append_jsonl(
@@ -468,6 +488,11 @@ class InteractiveRealClient:
             if choice in (0, 1):
                 return choice
             print("[vla] 请输入 0 或 1", flush=True)
+
+    def unlock(self) -> None:
+        self.locked_route = None
+        self.locked_subtask = None
+        self._append_jsonl({"event": "unlock"})
 
     def _publish_base(self, vx: float, vy: float, yaw_rate: float) -> None:
         msg = self.TeleopBaseCommand()
