@@ -1,0 +1,43 @@
+# 实机 VLA 交互评测配置（gx-real）
+# 用一条命令启动：python scripts/run_vla_real_interactive.py --config configs/vla_eval/real_go2_x5.yaml
+
+server:
+  endpoint: ws://127.0.0.1:10093
+  connect_timeout_s: 10.0
+  response_timeout_s: 120.0
+
+task:
+  instruction: "Pick up the coke can on box1 and place it on box2."
+  episode_id: "real_vla_go2_x5_0001"
+
+real:
+  mode: shadow              # shadow | live（live 需下方两个确认参数）
+  enable_live_output: false
+  confirm_live_output: ""
+  front_topic: /camera/front/image_raw/compressed
+  wrist_topic: /camera/wrist/image_raw/compressed
+  arm_target_state_topic: /arm/target_state
+  base_command_topic: /vla/base_cmd
+  arm_command_topic: /vla/arm_target
+  odom_topic: /odom
+  # body: 无需里程计，按第一个 waypoint 比例速度持续发布（现场无 odom 时用）
+  # odom: 世界系锚定，走到第一个 waypoint 后再请求下一次推理（需 nav_msgs/Odometry）
+  nav_anchor_mode: body
+  odom_timeout_s: 0.5
+  image_timeout_s: 0.75
+  decision_watchdog_s: 0.75
+  response_timeout_s: 120.0
+
+interactive:
+  # nav 阶段：走到预测的第一个 waypoint 后请求下一次推理
+  nav_waypoint_tolerance_m: 0.12
+  nav_yaw_tolerance_rad: 0.14
+  nav_max_steps_per_waypoint: 500
+  nav_max_replans: 64
+  nav_body_hold_steps: 10
+  # 抓取/放置人工门控：收到 grasp/place 决策后阻塞等待数字输入
+  arm_confirm_prompt: "是否执行 {route}？输入 1=执行 0=跳过: "
+  arm_confirm_timeout_s: null
+  show_raw_text: true
+  show_timing: true
+  jsonl_out: logs/vla_eval/real_vla_interactive.jsonl
