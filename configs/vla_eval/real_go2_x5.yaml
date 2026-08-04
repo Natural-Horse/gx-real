@@ -6,6 +6,13 @@ server:
   connect_timeout_s: 10.0
   response_timeout_s: 120.0
 
+# run_vla_real_all.sh 使用：工作站到服务器/机器狗的 SSH alias。
+# 为空则跳过隧道自动建立，适用于端口已手动转发的情形。
+deploy:
+  server_ssh: zju-server
+  robot_ssh: robodog
+  tmux_session: vla_real_all
+
 task:
   instruction: "Pick up the coke can on box1 and place it on box2."
   episode_id: "real_vla_go2_x5_0001"
