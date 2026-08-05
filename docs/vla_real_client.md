@@ -74,6 +74,25 @@ interactive:
 3. **robodog**：仓库位于 `~/gx-real`，front/wrist 相机发布 JPEG，X5 供电、
    `can0` 就绪；已按 `docs/实机测试指南.md` 完成必要前检，操作者握住手柄与急停。
 
+### 2.1 真机相机（RealSense）
+
+robodog 上通过 `scripts/publish_real_cameras.py` 把两台 RealSense 的 RGB 流转成
+JPEG 发布到 client 订阅的 topic（已集成进 `run_vla_real_all.sh` 的 `vla_cams`
+会话）：
+
+```bash
+cd ~/gx-real && source scripts/setup_env.sh
+python3 scripts/publish_real_cameras.py \
+  --front-dev /dev/video4 \    # 前置（8086:0b3a）彩色节点，USB2 下 424x240
+  --wrist-dev /dev/video10 \   # 腕部 D436（8086:1156）彩色节点，640x480
+  --rate 5.0
+```
+
+注意：脚本强制 V4L2 后端（Jetson 默认 GStreamer 读不了 `/dev/video*`）；
+设备节点会随 USB 枚举顺序变化，现场用 `lsusb` / `v4l2-ctl --list-devices` 确认。
+两个相机目前都在 USB2 上只有低分辨率模式，VLA 输入 224x224 够用；要跑满
+D436 的 1280x800@60 需改插 Jetson USB3 口。
+
 ## 3. 上机前检查（参考 README 第 5 节）
 
 真机启动前必须在 Jetson 上完成以下检查，全部通过后再进入 VLA 链路。任何一项失败
@@ -109,6 +128,7 @@ echo "${GX_REAL_PYTHON_BIN}"   # 应为 /usr/bin/python3
 ip a
 ip route
 ros2 topic list
+timeout 8 ros2 topic list | grep camera   # 应有 front/wrist 两个 topic
 ros2 topic echo /lowstate --once
 ros2 topic echo /wirelesscontroller --once
 ros2 topic echo lf/sportmodestate --once
