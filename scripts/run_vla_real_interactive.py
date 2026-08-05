@@ -137,9 +137,11 @@ class InteractiveRealClient:
         from robot_state.msg import ArmTargetState, TeleopBaseCommand
 
         rclpy_init()
+        spin_thread = None
         try:
             from rclpy.node import Node
             from sensor_msgs.msg import CompressedImage
+            from threading import Thread
 
             node = Node("vla_real_interactive_client")
             self.ArmTargetState = ArmTargetState
@@ -191,6 +193,16 @@ class InteractiveRealClient:
                     10,
                 )
 
+            # 订阅回调需要 executor 持续 spin；推理循环在主线程同步执行，
+            # 因此把 spin 放到后台线程，否则相机/臂状态回调永远不会触发。
+            spin_thread = Thread(
+                target=spin,
+                args=(node,),
+                daemon=True,
+                name="vla_client_rclpy_spin",
+            )
+            spin_thread.start()
+
             health = self.client.health()
             print(f"[vla] server health: {health}", flush=True)
             self.client.reset(self.episode_id)
@@ -198,6 +210,8 @@ class InteractiveRealClient:
             print(json.dumps(summary, ensure_ascii=False, indent=2))
             return summary
         finally:
+            if spin_thread is not None:
+                spin_thread.join(timeout=1.0)
             rclpy_shutdown()
 
     def _image_cb(self, key: str, msg) -> None:
@@ -263,9 +277,29 @@ class InteractiveRealClient:
             payload["locked_subtask"] = self.locked_subtask or ""
         return payload
 
+    def _wait_for_images(self) -> None:
+        """等待 front/wrist 两路图像到达（首次给 DDS 发现留时间）。"""
+
+        timeout = float(self.real_cfg.get("image_timeout_s", 0.75))
+        # 首次启动额外给 DDS 发现/相机上线留时间，之后由 image_timeout 约束新鲜度。
+        deadline = time.monotonic() + max(timeout * 4, 3.0)
+        while True:
+            missing = [
+                key for key in ("front", "wrist") if key not in self.images
+            ]
+            if not missing:
+                return
+            if time.monotonic() >= deadline:
+                raise RuntimeError(
+                    f"no {missing} image within "
+                    f"{max(timeout * 4, 3.0):.1f}s"
+                )
+            time.sleep(0.02)
+
     def _interactive_loop(self) -> dict[str, Any]:
         records: list[dict[str, Any]] = []
         max_replans = int(self.interactive_cfg.get("nav_max_replans", 64))
+        self._wait_for_images()
         while True:
             self.frame_index += 1
             payload = self._build_payload(

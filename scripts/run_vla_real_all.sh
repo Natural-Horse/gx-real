@@ -69,6 +69,12 @@ case "${ACTION}" in
   start)
     preflight
 
+    # 真机相机（front/wrist RGB -> JPEG CompressedImage topic）
+    tmux kill-session -t vla_cams 2>/dev/null || true
+    tmux new-session -d -s vla_cams \
+      "cd ${ROOT} && source scripts/setup_env.sh && \
+       python3 scripts/publish_real_cameras.py 2>&1 | tee logs/vla_cams.log"
+
     # 腿部 WBC（external_vla 速度源）
     tmux kill-session -t vla_leg 2>/dev/null || true
     tmux new-session -d -s vla_leg \
@@ -88,15 +94,15 @@ case "${ACTION}" in
        ${ROOT}/scripts/run_vla_real_interactive.py --config ${CONFIG_PATH} \
        2>&1 | tee logs/vla_client.log"
 
-    echo "[vla] 已启动: vla_leg / vla_arm / vla_client"
+    echo "[vla] 已启动: vla_cams / vla_leg / vla_arm / vla_client"
     echo "[vla] 各 tmux 日志: ~/gx-real/logs/vla_{leg,arm,client}.log"
     echo "[vla] 记得在工作站已执行隧道: manage_remote_vla_tunnel.sh start"
     ;;
   stop)
-    for name in client arm leg; do
+    for name in cams client arm leg; do
       tmux kill-session -t "vla_${name}" 2>/dev/null || true
     done
-    echo "[vla] 已停止 vla_leg / vla_arm / vla_client"
+    echo "[vla] 已停止 vla_cams / vla_leg / vla_arm / vla_client"
     ;;
   check)
     tmux ls | grep vla_ || echo "[vla] 没有 vla_* 会话"
