@@ -13,6 +13,7 @@ import numpy as np
 from modules.arx5_gripper_calib import (
     X5_GRIPPER_OPEN_READOUT,
     X5_GRIPPER_WIDTH,
+    X5_GRIPPER_ZERO_OFFSET,
     apply_x5_gripper_calibration as _apply_x5_gripper_calibration,
 )
 from modules.arm_observation import TRAINING_ARM_JOINT_POSE
@@ -341,7 +342,8 @@ class SpaceMouseArmNode:
                 self._log_info(
                     "Using persistent X5 gripper calibration: "
                     f"width={X5_GRIPPER_WIDTH:.3f} "
-                    f"open_readout={X5_GRIPPER_OPEN_READOUT:.5f}"
+                    f"open_readout={X5_GRIPPER_OPEN_READOUT:.5f} "
+                    f"zero_offset={X5_GRIPPER_ZERO_OFFSET:.4f}"
                 )
             urdf_path = os.path.join(ARX5_MODELS_DIR, f"{self.model}.urdf")
             if os.path.isfile(urdf_path):
