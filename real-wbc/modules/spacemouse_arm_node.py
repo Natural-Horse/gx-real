@@ -10,6 +10,11 @@ from typing import Optional, Sequence, Tuple
 
 import numpy as np
 
+from modules.arx5_gripper_calib import (
+    X5_GRIPPER_OPEN_READOUT,
+    X5_GRIPPER_WIDTH,
+    apply_x5_gripper_calibration as _apply_x5_gripper_calibration,
+)
 from modules.arm_observation import TRAINING_ARM_JOINT_POSE
 from modules.can_owner_lock import CanOwnerLock
 from modules.runtime_safety import (
@@ -28,13 +33,8 @@ BUTTON_HOME_JOINT_POSE = np.asarray(TRAINING_ARM_JOINT_POSE, dtype=np.float64)
 BUTTON_HOME_JOINT_SPEED = 0.5
 BUTTON_HOME_MIN_DURATION_SEC = 1.0
 BUTTON_HOME_MAX_DURATION_SEC = 3.0
-# 夹爪全开时的电机原始 readout（符号取决于具体臂）。
-# 本机 X5 实测（calibrate_gripper）fully-open readout = 5.13142。
-# 注意：本机夹爪闭合零位掉电/SDK 重启后会丢失，每次上电后必须先跑
-# scripts/calibrate_gripper.sh 重新标定（把零位写入电机），保持通电再启动
-# 本节点；否则静止位 readout≈-1.265 会被换算成 -0.022m，直接触发 SDK 启动
-# 检查失败。换臂/换 SDK 需重新校准并更新该值。
-X5_GRIPPER_OPEN_READOUT = 5.13142
+# 夹爪标定常量（全开 readout + 闭合零位偏移）见 modules/arx5_gripper_calib.py：
+# 本机闭合零位掉电易失，用软件零位偏移自动映射，无需每次上电交互式标定。
 ARM2BASE = np.eye(4, dtype=np.float64)
 ARM2BASE[:3, 3] = np.array([0.085, 0.0, 0.094], dtype=np.float64)
 TCP2EE = np.eye(4, dtype=np.float64)
@@ -132,8 +132,7 @@ def can_interface_exists(interface: str) -> bool:
 def apply_x5_gripper_calibration(robot_config, model: str) -> bool:
     if str(model).upper() != "X5":
         return False
-    robot_config.gripper_width = X5_GRIPPER_WIDTH
-    robot_config.gripper_open_readout = X5_GRIPPER_OPEN_READOUT
+    _apply_x5_gripper_calibration(robot_config)
     return True
 
 

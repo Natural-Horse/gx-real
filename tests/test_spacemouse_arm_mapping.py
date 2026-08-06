@@ -44,7 +44,8 @@ def test_x5_gripper_calibration_is_persistent_and_model_specific():
     config.gripper_open_readout = 5.03
     assert apply_x5_gripper_calibration(config, "X5") is True
     assert config.gripper_width == 0.088
-    assert config.gripper_open_readout == -5.07839
+    assert config.gripper_open_readout == 5.0784
+    assert config.gripper_zero_offset == -6.348
 
     other = type("RobotConfig", (), {})()
     other.gripper_width = 0.02

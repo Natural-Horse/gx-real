@@ -487,7 +487,8 @@ void Arx5ControllerBase::update_joint_state_()
         }
     }
 
-    joint_state_.gripper_pos = motor_msg[robot_config_.gripper_motor_id].angle_actual_rad /
+    joint_state_.gripper_pos = (motor_msg[robot_config_.gripper_motor_id].angle_actual_rad -
+                                robot_config_.gripper_zero_offset) /
                                robot_config_.gripper_open_readout * robot_config_.gripper_width;
 
     joint_state_.gripper_vel = motor_msg[robot_config_.gripper_motor_id].speed_actual_rad /
@@ -693,6 +694,7 @@ void Arx5ControllerBase::send_recv_()
         int start_send_motor_time_us = get_time_us();
 
         double gripper_motor_pos =
+            robot_config_.gripper_zero_offset +
             output_joint_cmd_.gripper_pos / robot_config_.gripper_width * robot_config_.gripper_open_readout;
         double gripper_motor_vel =
             output_joint_cmd_.gripper_vel / robot_config_.gripper_width * robot_config_.gripper_open_readout;

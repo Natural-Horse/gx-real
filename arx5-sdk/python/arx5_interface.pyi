@@ -22,6 +22,7 @@ class RobotConfig:
     gripper_torque_max: float
     gripper_width: float
     gripper_open_readout: float
+    gripper_zero_offset: float
     joint_dof: int
     motor_id: list[int]
     motor_type: list[MotorType]

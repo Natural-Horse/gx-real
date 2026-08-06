@@ -20,6 +20,7 @@ from modules.arm_cartesian_decoder import (
     ArmCartesianCommandDecoder,
     ArmCartesianDecodeResult,
 )
+from modules.arx5_gripper_calib import apply_x5_gripper_calibration
 from modules.arm_observation import (
     ArmObservationCache,
     TRAINING_ARM_JOINT_POSE,
@@ -1244,6 +1245,7 @@ class WBCNodeLeg12ArmPassthrough(Node):
 
     def initialize_arm_controller(self):
         self.arx5_robot_config = arx5.RobotConfigFactory.get_instance().get_config("X5_umi")
+        apply_x5_gripper_calibration(self.arx5_robot_config)
         self.arx5_robot_config.urdf_path = os.path.join(ARX5_MODELS_DIR, "X5_umi.urdf")
         self.arx5_controller_config = (
             arx5.ControllerConfigFactory.get_instance().get_config(

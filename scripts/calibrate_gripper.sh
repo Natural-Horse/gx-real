@@ -1,14 +1,18 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 上电后标定 X5 夹爪（本机夹爪零位易失，断电/SDK 重启后会失效，
-# 必须在上电后、启动臂节点前跑一次本脚本）。
+# 重测 X5 夹爪标定常量（换臂/换电机后使用）。
+#
+# 说明：本机夹爪闭合零位掉电易失，但节点已用软件零位偏移自动映射
+# （modules/arx5_gripper_calib.py 的 X5_GRIPPER_ZERO_OFFSET），因此
+# 每次上电启动臂节点前【不再需要】运行本脚本。只有在更换机械臂或夹爪电机后，
+# 才需要重新实测并更新 arx5_gripper_calib.py 里的两个常量。
 #
 # 用法（robodog 上）：
 #   bash scripts/calibrate_gripper.sh
 #
-# 流程：自动绕过 SDK 启动检查 -> calibrate_gripper（提示时手动闭合/打开）
-# 完成后保持通电，直接启动臂节点（run_vla_arm_real.sh / run_spacemouse_arm.sh）。
+# 流程：自动绕过 SDK 启动检查 -> calibrate_gripper（提示时手动闭合/打开），
+# 打印的 fully-open readout 即新的 X5_GRIPPER_OPEN_READOUT。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -44,8 +48,8 @@ EOF
 
 echo ""
 echo "======================================================"
-echo "标定完成。请保持通电，直接启动臂节点："
-echo "  bash scripts/run_vla_arm_real.sh"
-echo "若换臂/换 SDK，把打印的 fully-open readout 更新到"
-echo "real-wbc/modules/spacemouse_arm_node.py 的 X5_GRIPPER_OPEN_READOUT。"
+echo "实测完成。本机日常启动【不需要】标定：零位偏移已在"
+echo "real-wbc/modules/arx5_gripper_calib.py 中配置并自动应用。"
+echo "仅当换臂/换电机时，才把打印的 fully-open readout 更新到"
+echo "arx5_gripper_calib.py 的 X5_GRIPPER_OPEN_READOUT。"
 echo "======================================================"

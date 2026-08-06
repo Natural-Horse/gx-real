@@ -27,6 +27,10 @@ class RobotConfig
     double gripper_width;        // m, fully opened: gripper_width, fully closed: 0
     double gripper_open_readout; // fully-opened gripper motor readout. Should be calibrated using
                                  // python/examples/calibrate.py
+    double gripper_zero_offset;  // raw motor readout at the fully-closed position. Some robots lose the
+                                 // closed-position zero on power-off/SDK restart; this software offset maps
+                                 // closed -> 0 m without re-running calibrate_gripper every boot. Apply the
+                                 // same offset to both the read and command paths.
     int joint_dof;
     std::vector<int> motor_id;
     std::vector<MotorType> motor_type;
@@ -49,13 +53,14 @@ class RobotConfig
                 double gripper_width, double gripper_open_readout, int joint_dof, std::vector<int> motor_id,
                 std::vector<MotorType> motor_type, int gripper_motor_id, MotorType gripper_motor_type,
                 Eigen::Vector3d gravity_vector, std::string base_link_name, std::string eef_link_name,
-                std::string urdf_path)
+                std::string urdf_path, double gripper_zero_offset = 0.0)
         : robot_model(robot_model), joint_pos_min(joint_pos_min), joint_pos_max(joint_pos_max),
           joint_vel_max(joint_vel_max), joint_torque_max(joint_torque_max), ee_vel_max(ee_vel_max),
           gripper_vel_max(gripper_vel_max), gripper_torque_max(gripper_torque_max), gripper_width(gripper_width),
-          gripper_open_readout(gripper_open_readout), joint_dof(joint_dof), motor_id(motor_id), motor_type(motor_type),
-          gripper_motor_id(gripper_motor_id), gripper_motor_type(gripper_motor_type), gravity_vector(gravity_vector),
-          base_link_name(base_link_name), eef_link_name(eef_link_name), urdf_path(urdf_path)
+          gripper_open_readout(gripper_open_readout), gripper_zero_offset(gripper_zero_offset), joint_dof(joint_dof),
+          motor_id(motor_id), motor_type(motor_type), gripper_motor_id(gripper_motor_id),
+          gripper_motor_type(gripper_motor_type), gravity_vector(gravity_vector), base_link_name(base_link_name),
+          eef_link_name(eef_link_name), urdf_path(urdf_path)
     {
     }
 };
