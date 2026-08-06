@@ -28,10 +28,12 @@ BUTTON_HOME_JOINT_POSE = np.asarray(TRAINING_ARM_JOINT_POSE, dtype=np.float64)
 BUTTON_HOME_JOINT_SPEED = 0.5
 BUTTON_HOME_MIN_DURATION_SEC = 1.0
 BUTTON_HOME_MAX_DURATION_SEC = 3.0
-X5_GRIPPER_WIDTH = 0.088
 # 夹爪全开时的电机原始 readout（符号取决于具体臂）。
-# 本机 X5 实测（calibrate_gripper）fully-open readout = 5.13142，且闭合零位
-# 已在校准中写入电机；换臂/换 SDK 需重新校准并更新该值。
+# 本机 X5 实测（calibrate_gripper）fully-open readout = 5.13142。
+# 注意：本机夹爪闭合零位掉电/SDK 重启后会丢失，每次上电后必须先跑
+# scripts/calibrate_gripper.sh 重新标定（把零位写入电机），保持通电再启动
+# 本节点；否则静止位 readout≈-1.265 会被换算成 -0.022m，直接触发 SDK 启动
+# 检查失败。换臂/换 SDK 需重新校准并更新该值。
 X5_GRIPPER_OPEN_READOUT = 5.13142
 ARM2BASE = np.eye(4, dtype=np.float64)
 ARM2BASE[:3, 3] = np.array([0.085, 0.0, 0.094], dtype=np.float64)
