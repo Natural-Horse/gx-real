@@ -10,11 +10,14 @@ set -euo pipefail
 #
 # 用法：
 #   bash scripts/run_vla_real_quad.sh --config configs/vla_eval/real_go2_x5.yaml start
+#   bash scripts/run_vla_real_quad.sh --config configs/vla_eval/real_go2_x5.yaml \
+#     --override real.mode=live --override real.enable_live_output=true \
+#     --override real.confirm_live_output=I_UNDERSTAND_LIVE_OUTPUT start
 #   bash scripts/run_vla_real_quad.sh --config configs/vla_eval/real_go2_x5.yaml check
 #   bash scripts/run_vla_real_quad.sh --config configs/vla_eval/real_go2_x5.yaml stop
 #
 # 查看：tmux attach -t go2_vla_quad （Ctrl-B 松开后按方向键切换 pane；
-# GRASP/PLACE 时点击 client pane 输入 1/0）。
+# 需要确认动作时切到 client pane 输入 0/1）。
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -27,10 +30,15 @@ usage() {
 
 CONFIG=""
 ACTION=""
+OVERRIDES=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config)
       CONFIG="${2:-}"
+      shift 2
+      ;;
+    --override)
+      OVERRIDES+=("--override" "${2:-}")
       shift 2
       ;;
     start|stop|check)
@@ -100,6 +108,7 @@ case "${ACTION}" in
     tmux split-window -v -t "${SESSION}:0.1" \
       "cd ${ROOT} && source scripts/setup_env.sh && \
        python3 scripts/run_vla_real_interactive.py --config ${CONFIG_PATH} \
+       ${OVERRIDES[@]+"${OVERRIDES[@]}"} \
        2>&1 | tee logs/vla_client.log"
 
     tmux select-layout -t "${SESSION}" tiled
