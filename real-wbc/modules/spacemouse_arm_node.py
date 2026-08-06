@@ -29,7 +29,10 @@ BUTTON_HOME_JOINT_SPEED = 0.5
 BUTTON_HOME_MIN_DURATION_SEC = 1.0
 BUTTON_HOME_MAX_DURATION_SEC = 3.0
 X5_GRIPPER_WIDTH = 0.088
-X5_GRIPPER_OPEN_READOUT = -5.07839
+# 夹爪全开时的电机原始 readout（符号取决于具体臂）。
+# 本机 X5 的 readout 为正，采用 SDK X5 默认 +5.03；若换臂/换 SDK 需重新校准
+# （SDK calibrate_gripper 会打印实测 fully-open readout）。
+X5_GRIPPER_OPEN_READOUT = 5.03
 ARM2BASE = np.eye(4, dtype=np.float64)
 ARM2BASE[:3, 3] = np.array([0.085, 0.0, 0.094], dtype=np.float64)
 TCP2EE = np.eye(4, dtype=np.float64)

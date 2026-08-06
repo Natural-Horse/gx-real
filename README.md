@@ -608,7 +608,12 @@ ros2 topic echo lf/sportmodestate
 - `check_env.sh --spacemouse` 失败在 `spnav` 或 `atomics`：安装 SpaceMouse Python 依赖；失败在 `spacenavd` 或 `libspnav`：安装/启动系统服务。
 - `undefined symbol: PyCObject_AsVoidPtr`：卸载 PyPI 版 `spnav`，安装 README 中固定的 Cheng Chi fork。
 - 单独机械臂测试失败在 `Error document empty` / `Failed to get chain from kdl tree`：ARX5 Python 扩展可能从 pip 安装目录加载，默认找不到仓库里的 URDF。更新到最新代码后，`scripts/run_arm_spacemouse_test.sh` 会显式把 `arx5-sdk/models` 传给示例。
-- `Gripper position error: got -0.08x but should be in 0~0.088`：这是部分新款 X5 夹爪电机安装方向与 SDK 默认符号相反导致的已知校准问题。当前 `run_spacemouse_arm.sh --model X5` 会在创建 controller 前固定写入 `gripper_width=0.088`、`gripper_open_readout=-5.07839`；启动日志必须出现 `Using persistent X5 gripper calibration`。SDK 校准程序即使打印正的 fully-open readout，也可能需要按电机方向写成负值，不能无条件照抄正号。详见 [实机测试指南](docs/实机测试指南.md)。
+- `Gripper position error: got -0.08x but should be in 0~0.088`：这是 X5 夹爪电机安装方向与 `gripper_open_readout` 符号不匹配导致的校准问题。当前
+  `run_spacemouse_arm.sh --model X5` 固定写入 `gripper_width=0.088`、
+  `gripper_open_readout=5.03`（本机 X5 的 readout 为正，采用 SDK 默认值）；
+  换臂/换 SDK 后必须用 SDK `calibrate_gripper` 重新校准，并按电机实际方向
+  核对正负号（此前另一台臂用的是 `-5.07839`）。启动日志必须出现
+  `Using persistent X5 gripper calibration`。详见 [实机测试指南](docs/实机测试指南.md)。
 - `/usr/bin/python3 -m pip show arx5-interface` 显示 `Package(s) not found`，但 `import arx5_interface` 成功：当前扩展可能是直接放在 `~/.local/lib/python3.8/site-packages` 的 `.so`，没有 pip metadata；以 `arx5_interface.__file__` 为准。
 - `Background send_recv task is running too slow`：这是 ARX5 SDK 的 DEBUG 级通信周期提示。偶发 `2-4 ms` 且机械臂运动平滑、无 `warning/error` 时可以忽略；默认日志级别已改为 `info`，需要排查底层周期时再加 `--log-level debug`。
 - `Inverse kinematics failed: E_EXCEED_JOINT_LIMIT` 或 `Over current detected`：目标末端位姿太快或太远，已经触到 IK/关节/电流保护。立即松开 SpaceMouse 或 `Ctrl+C` 停止；必要时临时降低速度 `--pos-speed 0.03 --ori-speed 0.10`，或加 home 附近工作空间限制。
