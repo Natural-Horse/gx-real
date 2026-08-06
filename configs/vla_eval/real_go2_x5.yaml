@@ -1,38 +1,82 @@
-# 实机 VLA 交互评测配置（gx-real）
-# 用一条命令启动：python scripts/run_vla_real_interactive.py --config configs/vla_eval/real_go2_x5.yaml
+# 实机 VLA 闭环统一配置（gx-real）
+# 启动器 scripts/run_vla_real_quad.sh / run_vla_real_all.sh 按模块读取本文件，
+# 生成各节点启动参数；client 自身也读本文件。
+# 常用启动（robodog 上）：
+#   bash scripts/run_vla_real_quad.sh --config configs/vla_eval/real_go2_x5.yaml \
+#     --override client.mode=live --override client.enable_live_output=true \
+#     --override client.confirm_live_output=I_UNDERSTAND_LIVE_OUTPUT start
 
+# ---- 服务器（GPU 服务器上的 StarVLA 推理服务） ----
 server:
   endpoint: ws://127.0.0.1:10093
   connect_timeout_s: 10.0
   response_timeout_s: 120.0
 
+# ---- 任务（本轮评测语义） ----
 task:
   instruction: "Pick up the coke can on box1 and place it on box2."
   episode_id: "real_vla_go2_x5_0001"
 
-real:
-  mode: shadow              # shadow | live（live 需下方两个确认参数）
+# ---- 相机（robodog 发布 front/wrist JPEG） ----
+camera:
+  front_dev: /dev/video4
+  wrist_dev: /dev/video10
+  front_topic: /camera/front/image_raw/compressed
+  wrist_topic: /camera/wrist/image_raw/compressed
+  rate: 5.0
+  jpeg_quality: 85
+
+# ---- 腿部 WBC（Go2，消费 /vla/base_cmd 速度） ----
+leg:
+  device: cpu
+  pose_estimator: none
+  standup_mode: internal
+  base_command_source: external_vla
+  external_base_topic: /vla/base_cmd
+  external_base_watchdog_sec: 0.25
+  arm_control_owner: external_spacemouse
+  arm_state_topic: /arm/state
+  arm_target_topic: /arm/target_state
+  arm_home_topic: /arm/home
+  safety_topic: /safety/estop
+  require_arm_state_for_rl: true
+  gripper_cmd: 0.0
+  arm_pose: [0.0, 0.3, 0.5, 0.0, 0.0, 0.0]
+  arm_reset_pose: [0.0, 0.3, 0.5, 0.0, 0.0, 0.0]
+
+# ---- 机械臂 X5（唯一 CAN owner，消费 /vla/arm_target） ----
+arm:
+  model: X5
+  can_interface: can0
+  control_source: external_vla
+  external_target_topic: /vla/arm_target
+  external_target_watchdog_sec: 0.25
+  safety_topic: /safety/estop
+
+# ---- client（远程推理交互客户端） ----
+client:
+  mode: shadow          # shadow | live（live 需 enable_live_output + confirm_live_output 双确认）
   enable_live_output: false
   confirm_live_output: ""
+  nav_anchor_mode: body # body: 无里程计，按第一个 waypoint 比例速度短时执行；
+                        # odom: 走到第一个 waypoint 后再请求下一次推理
+  odom_topic: /odom
+  odom_timeout_s: 0.5
+  image_timeout_s: 0.75
+  decision_watchdog_s: 0.75
+  response_timeout_s: 120.0
   front_topic: /camera/front/image_raw/compressed
   wrist_topic: /camera/wrist/image_raw/compressed
   arm_target_state_topic: /arm/target_state
   base_command_topic: /vla/base_cmd
   arm_command_topic: /vla/arm_target
-  odom_topic: /odom
-  # body: 无需里程计，按第一个 waypoint 比例速度持续发布（现场无 odom 时用）
-  # odom: 世界系锚定，走到第一个 waypoint 后再请求下一次推理（需 nav_msgs/Odometry）
-  nav_anchor_mode: body
-  odom_timeout_s: 0.5
-  image_timeout_s: 0.75
-  decision_watchdog_s: 0.75
-  response_timeout_s: 120.0
 
+# ---- 交互确认（client 终端阻塞询问 0=否 1=是） ----
 interactive:
-  # 交互确认：首次推理 / route 与上一次不同 / 上一动作被拒绝 时阻塞询问
-  # （0=否 1=是），期间不发新推理、不执行动作；其余情况直接执行。
+  # 是否在首次推理 / route 变化 / 上一动作被拒时阻塞询问
+  confirm_nav: true
+  confirm_arm: true
   action_confirm_prompt: "是否执行 {route}？0=否 1=是: "
-  # nav 阶段：走到预测的第一个 waypoint 后请求下一次推理
   nav_waypoint_tolerance_m: 0.12
   nav_yaw_tolerance_rad: 0.14
   nav_max_steps_per_waypoint: 500

@@ -100,7 +100,8 @@ class InteractiveRealClient:
     def __init__(self, cfg: dict[str, Any]) -> None:
         self.server_cfg = cfg.get("server") or {}
         self.task_cfg = cfg.get("task") or {}
-        self.real_cfg = cfg.get("real") or {}
+        # client 参数模块为 `client`，兼容旧名 `real`。
+        self.real_cfg = cfg.get("client") or cfg.get("real") or {}
         self.interactive_cfg = cfg.get("interactive") or {}
 
         endpoint = str(
@@ -397,6 +398,12 @@ class InteractiveRealClient:
 
         返回 True 表示可以执行（无需确认或操作者输入 1），False 表示被拒绝。
         """
+        is_arm = route in {"grasp", "place"}
+        confirm_key = "confirm_arm" if is_arm else "confirm_nav"
+        if not bool(self.interactive_cfg.get(confirm_key, True)):
+            self.last_gate_accepted = True
+            self.last_confirmed_route = route
+            return True
         first_decision = self.last_confirmed_route is None
         route_changed = route != self.last_confirmed_route
         prev_rejected = self.last_gate_accepted is False

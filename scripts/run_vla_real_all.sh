@@ -23,10 +23,15 @@ usage() {
 
 CONFIG=""
 ACTION=""
+OVERRIDES=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --config)
       CONFIG="${2:-}"
+      shift 2
+      ;;
+    --override)
+      OVERRIDES+=("--override" "${2:-}")
       shift 2
       ;;
     start|stop|check)
@@ -69,29 +74,38 @@ case "${ACTION}" in
   start)
     preflight
 
+    # 从统一 yaml 按模块生成各节点启动参数
+    CAM_ARGS="$(python3 "${ROOT}/scripts/vla_config_args.py" --config "${CONFIG_PATH}" --module camera)"
+    LEG_ARGS="$(python3 "${ROOT}/scripts/vla_config_args.py" --config "${CONFIG_PATH}" --module leg)"
+    ARM_ARGS="$(python3 "${ROOT}/scripts/vla_config_args.py" --config "${CONFIG_PATH}" --module arm)"
+
     # 真机相机（front/wrist RGB -> JPEG CompressedImage topic）
     tmux kill-session -t vla_cams 2>/dev/null || true
     tmux new-session -d -s vla_cams \
       "cd ${ROOT} && source scripts/setup_env.sh && \
-       python3 scripts/publish_real_cameras.py 2>&1 | tee logs/vla_cams.log"
+       python3 scripts/publish_real_cameras.py ${CAM_ARGS} \
+       2>&1 | tee logs/vla_cams.log"
 
     # 腿部 WBC（external_vla 速度源）
     tmux kill-session -t vla_leg 2>/dev/null || true
     tmux new-session -d -s vla_leg \
       "cd ${ROOT} && source scripts/setup_env.sh && \
-       bash scripts/run_vla_leg12_real.sh 2>&1 | tee logs/vla_leg.log"
+       bash scripts/run_vla_leg12_real.sh ${LEG_ARGS} \
+       2>&1 | tee logs/vla_leg.log"
 
     # X5 机械臂（唯一 CAN owner，external_vla 源）
     tmux kill-session -t vla_arm 2>/dev/null || true
     tmux new-session -d -s vla_arm \
       "cd ${ROOT} && source scripts/setup_env.sh && \
-       bash scripts/run_vla_arm_real.sh 2>&1 | tee logs/vla_arm.log"
+       bash scripts/run_vla_arm_real.sh ${ARM_ARGS} \
+       2>&1 | tee logs/vla_arm.log"
 
     # 交互 client（连接本机回环 ws://127.0.0.1:10093，经工作站隧道到服务器）
     tmux kill-session -t vla_client 2>/dev/null || true
     tmux new-session -d -s vla_client \
       "cd ${ROOT} && source scripts/setup_env.sh && \
        ${ROOT}/scripts/run_vla_real_interactive.py --config ${CONFIG_PATH} \
+       ${OVERRIDES[@]+"${OVERRIDES[@]}"} \
        2>&1 | tee logs/vla_client.log"
 
     echo "[vla] 已启动: vla_cams / vla_leg / vla_arm / vla_client"

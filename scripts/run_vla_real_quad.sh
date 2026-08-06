@@ -80,6 +80,11 @@ case "${ACTION}" in
   start)
     preflight
 
+    # 从统一 yaml 按模块生成各节点启动参数
+    CAM_ARGS="$(python3 "${ROOT}/scripts/vla_config_args.py" --config "${CONFIG_PATH}" --module camera)"
+    LEG_ARGS="$(python3 "${ROOT}/scripts/vla_config_args.py" --config "${CONFIG_PATH}" --module leg)"
+    ARM_ARGS="$(python3 "${ROOT}/scripts/vla_config_args.py" --config "${CONFIG_PATH}" --module arm)"
+
     # 停掉旧的单会话节点，避免 CAN owner / 重复 WBC / 相机占用冲突
     for legacy in vla_cams vla_leg vla_arm vla_client vla_decompress; do
       if tmux has-session -t "${legacy}" 2>/dev/null; then
@@ -93,17 +98,20 @@ case "${ACTION}" in
     # 左上：相机
     tmux new-session -d -s "${SESSION}" -n nodes \
       "cd ${ROOT} && source scripts/setup_env.sh && \
-       python3 scripts/publish_real_cameras.py 2>&1 | tee logs/vla_cams.log"
+       python3 scripts/publish_real_cameras.py ${CAM_ARGS} \
+       2>&1 | tee logs/vla_cams.log"
     # 节点退出后 pane 保留显示错误，便于排查
     tmux set-option -t "${SESSION}" remain-on-exit on 2>/dev/null || true
     # 右上：腿部 WBC
     tmux split-window -h -t "${SESSION}:0.0" \
       "cd ${ROOT} && source scripts/setup_env.sh && \
-       bash scripts/run_vla_leg12_real.sh 2>&1 | tee logs/vla_leg.log"
+       bash scripts/run_vla_leg12_real.sh ${LEG_ARGS} \
+       2>&1 | tee logs/vla_leg.log"
     # 左下：X5 机械臂
     tmux split-window -v -t "${SESSION}:0.0" \
       "cd ${ROOT} && source scripts/setup_env.sh && \
-       bash scripts/run_vla_arm_real.sh 2>&1 | tee logs/vla_arm.log"
+       bash scripts/run_vla_arm_real.sh ${ARM_ARGS} \
+       2>&1 | tee logs/vla_arm.log"
     # 右下：交互 client
     tmux split-window -v -t "${SESSION}:0.1" \
       "cd ${ROOT} && source scripts/setup_env.sh && \
