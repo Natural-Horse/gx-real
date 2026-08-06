@@ -35,20 +35,23 @@ fi
 
 source "${ROOT}/scripts/setup_env.sh"
 
-# 3) 等待两路原始图像话题有数据（最多 20s）
-echo "[rviz] 等待 front/wrist 图像..."
-for i in $(seq 1 20); do
-  front_ok=$(timeout 4 ros2 topic hz /camera/front/image_raw 2>/dev/null | grep -c "average rate" || true)
-  wrist_ok=$(timeout 4 ros2 topic hz /camera/wrist/image_raw 2>/dev/null | grep -c "average rate" || true)
+# 3) 等待两路压缩话题被发布（最多 15s；不依赖 ros2 topic hz，
+#    Jetson 上 CycloneDDS 发现慢会导致 hz 超时误判）
+echo "[rviz] 等待 front/wrist 话题..."
+for i in $(seq 1 15); do
+  front_ok=$(timeout 3 ros2 topic list 2>/dev/null | grep -c "/camera/front/image_raw/compressed" || true)
+  wrist_ok=$(timeout 3 ros2 topic list 2>/dev/null | grep -c "/camera/wrist/image_raw/compressed" || true)
   if [[ "${front_ok}" -gt 0 && "${wrist_ok}" -gt 0 ]]; then
     break
   fi
   sleep 1
 done
 if [[ "${front_ok:-0}" -eq 0 || "${wrist_ok:-0}" -eq 0 ]]; then
-  echo "WARN: 图像话题还没数据（front=${front_ok:-0} wrist=${wrist_ok:-0}），"
-  echo "      仍会打开 rviz2；请检查相机/解压节点日志 logs/vla_{cams,decompress}.log"
+  echo "WARN: 相机话题还没出现（front=${front_ok:-0} wrist=${wrist_ok:-0}），"
+  echo "      仍会打开 rviz2；请检查 logs/vla_cams.log"
 fi
+# 给 DDS 发现和解压节点留时间，rviz 打开后图像会陆续显示
+sleep 5
 
 # 4) 图形显示检查
 if [[ -z "${DISPLAY:-}" ]]; then
