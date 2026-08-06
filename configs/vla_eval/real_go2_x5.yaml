@@ -63,8 +63,6 @@ client:
   odom_topic: /odom
   odom_timeout_s: 0.5
   image_timeout_s: 0.75
-  decision_watchdog_s: 0.75
-  response_timeout_s: 120.0
   front_topic: /camera/front/image_raw/compressed
   wrist_topic: /camera/wrist/image_raw/compressed
   arm_target_state_topic: /arm/target_state

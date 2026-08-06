@@ -492,7 +492,16 @@ class InteractiveRealClient:
                 print("[vla] odom unavailable/stale; refusing anchored NAV", flush=True)
                 self._publish_base(0.0, 0.0, 0.0)
                 return
-            adapter = WaypointAdapter(WaypointAdapterConfig())
+            adapter = WaypointAdapter(
+                WaypointAdapterConfig(
+                    waypoint_position_tolerance_m=float(
+                        self.interactive_cfg.get("nav_waypoint_tolerance_m", 0.12)
+                    ),
+                    waypoint_yaw_tolerance_rad=float(
+                        self.interactive_cfg.get("nav_yaw_tolerance_rad", 0.14)
+                    ),
+                )
+            )
             adapter.set_waypoints(
                 [waypoint],
                 current_world_xyyaw=self.odom_xyyaw,

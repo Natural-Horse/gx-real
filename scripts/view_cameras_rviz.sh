@@ -14,6 +14,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 CONFIG_RVIZ="${ROOT}/configs/rviz/cameras.rviz"
+VLA_CONFIG="${VLA_CONFIG:-${ROOT}/configs/vla_eval/real_go2_x5.yaml}"
+CAM_ARGS="$(python3 "${ROOT}/scripts/vla_config_args.py" --config "${VLA_CONFIG}" --module camera 2>/dev/null || true)"
 
 # 1) 相机发布器（未运行时启动 vla_cams）
 if ! pgrep -f "[p]ublish_real_cameras.py" >/dev/null; then
@@ -21,7 +23,8 @@ if ! pgrep -f "[p]ublish_real_cameras.py" >/dev/null; then
   tmux kill-session -t vla_cams 2>/dev/null || true
   tmux new-session -d -s vla_cams \
     "cd ${ROOT} && source scripts/setup_env.sh && \
-     python3 scripts/publish_real_cameras.py 2>&1 | tee logs/vla_cams.log"
+     python3 scripts/publish_real_cameras.py ${CAM_ARGS} \
+     2>&1 | tee logs/vla_cams.log"
 fi
 
 # 2) 解压节点（未运行时启动 vla_decompress）
