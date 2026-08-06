@@ -26,9 +26,10 @@ fi
 # 2) can0 必须 UP
 if ! ip -details link show can0 2>/dev/null | grep -q "state UP"; then
   echo "WARN: can0 未 UP，尝试 setup_arx_can.sh"
-  CAN_DEV=$(ls /dev/serial/by-id/usb-Openlight_Labs_CANable2* 2>/dev/null | head -1)
+  CAN_DEV="$("${ROOT}/scripts/find_can_dev.sh" 2>/dev/null || true)"
   if [[ -z "${CAN_DEV}" ]]; then
-    CAN_DEV=$(ls /dev/serial/by-id/usb-ARX* 2>/dev/null | head -1)
+    echo "ERROR: 未找到 USB-CAN 设备，请检查连接后重试。" >&2
+    exit 1
   fi
   "${ROOT}/scripts/setup_arx_can.sh" "${CAN_DEV}" can0 8
   ip -details link show can0
