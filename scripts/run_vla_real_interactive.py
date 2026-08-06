@@ -128,9 +128,28 @@ class InteractiveRealClient:
         self.replan_count = 0
         self.locked_route: str | None = None
         self.locked_subtask: str | None = None
+        # 交互确认状态：首次推理、route 变化、或上一动作被拒绝时必须阻塞询问。
+        self.last_confirmed_route: str | None = None
+        self.last_gate_accepted: bool | None = None
         self.log_path = Path(
             str(self.interactive_cfg.get("jsonl_out", "logs/vla_eval/real_interactive.jsonl"))
         )
+
+    def _live_enabled(self) -> bool:
+        """live 输出必须显式双确认，否则一律按 shadow 处理（不发布任何动作）。"""
+        if str(self.real_cfg.get("mode", "shadow")) != "live":
+            return False
+        if not bool(self.real_cfg.get("enable_live_output", False)):
+            print("[vla] live mode requires real.enable_live_output=true", flush=True)
+            return False
+        if str(self.real_cfg.get("confirm_live_output", "")) != "I_UNDERSTAND_LIVE_OUTPUT":
+            print(
+                "[vla] live mode requires real.confirm_live_output="
+                "I_UNDERSTAND_LIVE_OUTPUT",
+                flush=True,
+            )
+            return False
+        return True
 
     def run(self) -> dict[str, Any]:
         from rclpy import init as rclpy_init, spin, shutdown as rclpy_shutdown
@@ -341,9 +360,13 @@ class InteractiveRealClient:
                     print("[vla] NAV replan limit reached; stopping", flush=True)
                     break
                 self.replan_count += 1
+                if not self._confirm_action_if_needed(decision, route, subtask):
+                    continue
                 self._execute_nav(decision)
                 continue
             if route in {"grasp", "place"}:
+                if not self._confirm_action_if_needed(decision, route, subtask):
+                    continue
                 self._gate_arm(decision)
                 self.phase = "nav_place" if route == "grasp" else "place"
                 continue
@@ -364,6 +387,68 @@ class InteractiveRealClient:
             "records": records,
         }
 
+    def _confirm_action_if_needed(
+        self,
+        decision,
+        route: str,
+        subtask: str,
+    ) -> bool:
+        """按条件阻塞确认动作：首次推理 / route 与上次不同 / 上一动作被拒绝。
+
+        返回 True 表示可以执行（无需确认或操作者输入 1），False 表示被拒绝。
+        """
+        first_decision = self.last_confirmed_route is None
+        route_changed = route != self.last_confirmed_route
+        prev_rejected = self.last_gate_accepted is False
+        if not (first_decision or route_changed or prev_rejected):
+            return True
+
+        reason = "first" if first_decision else ("route_change" if route_changed else "prev_rejected")
+        self._print_predicted_action(decision, route, subtask)
+        prompt = str(
+            self.interactive_cfg.get(
+                "action_confirm_prompt",
+                "是否执行 {route}？0=否 1=是: ",
+            )
+        ).format(route=route, subtask=subtask)
+        choice = self._ask_number(prompt)
+        self._append_jsonl(
+            {
+                "event": "action_gate",
+                "frame_index": self.frame_index,
+                "route": route,
+                "reason": reason,
+                "choice": choice,
+            }
+        )
+        if choice != 1:
+            print(f"[vla] {route} rejected by operator", flush=True)
+            self.last_gate_accepted = False
+            self.unlock()
+            return False
+        self.last_gate_accepted = True
+        self.last_confirmed_route = route
+        return True
+
+    def _print_predicted_action(self, decision, route: str, subtask: str) -> None:
+        """确认前把下一个预测的动作完整打印出来。"""
+        print(
+            f"[vla] >>> 下一个预测动作: route={route} subtask={subtask}",
+            flush=True,
+        )
+        if route == "nav" and decision.nav_waypoints:
+            waypoint = decision.nav_waypoints[0]
+            print(
+                f"[vla]     第一个 waypoint: {[round(v, 3) for v in waypoint]}",
+                flush=True,
+            )
+        if route in {"grasp", "place"} and decision.arm_targets_base:
+            target = decision.arm_targets_base[0]
+            print(
+                f"[vla]     TCP 目标(base): {[round(v, 3) for v in target]}",
+                flush=True,
+            )
+
     def _execute_nav(self, decision) -> None:
         waypoints = decision.nav_waypoints
         if not waypoints:
@@ -375,6 +460,20 @@ class InteractiveRealClient:
             f"{[round(v, 3) for v in waypoint]}",
             flush=True,
         )
+        if not self._live_enabled():
+            print(
+                "[vla] NAV shadow: waypoint recorded, base command NOT published",
+                flush=True,
+            )
+            self._append_jsonl(
+                {
+                    "event": "nav_shadow",
+                    "frame_index": self.frame_index,
+                    "replan": self.replan_count,
+                    "waypoint": list(waypoint),
+                }
+            )
+            return
         nav_anchor_mode = str(self.real_cfg.get("nav_anchor_mode", "body"))
         if nav_anchor_mode == "odom":
             from modules.waypoint_adapter import WaypointAdapter, WaypointAdapterConfig
@@ -465,32 +564,12 @@ class InteractiveRealClient:
         if not targets:
             print(f"[vla] {route} decision has no arm target; skipping", flush=True)
             return
-        prompt = str(
-            self.interactive_cfg.get(
-                "arm_confirm_prompt",
-                "是否执行 {route}？输入 1=执行 0=跳过: ",
-            )
-        ).format(route=route, subtask=decision.subtask)
         print(
             f"[vla] {route} subtask={decision.subtask} "
             f"target={[round(v, 3) for v in targets[0]]}",
             flush=True,
         )
-        choice = self._ask_number(prompt)
-        if choice != 1:
-            print(f"[vla] {route} skipped by operator", flush=True)
-            self.unlock()
-            self._append_jsonl(
-                {
-                    "event": "arm_gate",
-                    "frame_index": self.frame_index,
-                    "route": route,
-                    "choice": choice,
-                }
-            )
-            return
-        self.unlock()
-        if str(self.real_cfg.get("mode", "shadow")) != "live":
+        if not self._live_enabled():
             print(f"[vla] {route} shadow: target recorded, not published", flush=True)
             self._append_jsonl(
                 {
@@ -505,6 +584,7 @@ class InteractiveRealClient:
         result = gate.evaluate(targets[0], current_values=self.current_arm_target)
         if not result.accepted:
             print(f"[vla] {route} rejected: {result.reason}", flush=True)
+            self.last_gate_accepted = False
             return
         self._publish_arm_target(targets[0])
 

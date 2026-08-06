@@ -29,15 +29,15 @@ real:
   response_timeout_s: 120.0
 
 interactive:
+  # 交互确认：首次推理 / route 与上一次不同 / 上一动作被拒绝 时阻塞询问
+  # （0=否 1=是），期间不发新推理、不执行动作；其余情况直接执行。
+  action_confirm_prompt: "是否执行 {route}？0=否 1=是: "
   # nav 阶段：走到预测的第一个 waypoint 后请求下一次推理
   nav_waypoint_tolerance_m: 0.12
   nav_yaw_tolerance_rad: 0.14
   nav_max_steps_per_waypoint: 500
   nav_max_replans: 64
   nav_body_hold_steps: 10
-  # 抓取/放置人工门控：收到 grasp/place 决策后阻塞等待数字输入
-  arm_confirm_prompt: "是否执行 {route}？输入 1=执行 0=跳过: "
-  arm_confirm_timeout_s: null
   show_raw_text: true
   show_timing: true
   jsonl_out: logs/vla_eval/real_vla_interactive.jsonl
