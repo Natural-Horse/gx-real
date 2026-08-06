@@ -83,13 +83,15 @@ JPEG 发布到 client 订阅的 topic（已集成进 `run_vla_real_all.sh` 的 `
 ```bash
 cd ~/gx-real && source scripts/setup_env.sh
 python3 scripts/publish_real_cameras.py \
-  --front-dev /dev/video4 \    # 前置（8086:0b3a）彩色节点，USB2 下 424x240
-  --wrist-dev /dev/video10 \   # 腕部 D436（8086:1156）彩色节点，640x480
+  --front-dev /dev/video4 \
+  --wrist-dev /dev/video10 \
   --rate 5.0
 ```
 
 注意：脚本强制 V4L2 后端（Jetson 默认 GStreamer 读不了 `/dev/video*`）；
 设备节点会随 USB 枚举顺序变化，现场用 `lsusb` / `v4l2-ctl --list-devices` 确认。
+当前映射：`/dev/video4` = 前置（8086:0b3a，USB2 下 424x240）、
+`/dev/video10` = 腕部 D436（8086:1156，640x480）。
 两个相机目前都在 USB2 上只有低分辨率模式，VLA 输入 224x224 够用；要跑满
 D436 的 1280x800@60 需改插 Jetson USB3 口。
 
@@ -103,10 +105,13 @@ D436 的 1280x800@60 需改插 Jetson USB3 口。
 ```bash
 conda deactivate
 cd ~/gx-real
-git pull                       # robodog 无 GitHub 访问，改为 rsync/bundle 同步
+git pull
 source scripts/setup_env.sh
-scripts/check_env.sh           # 通过时输出 [gx-real] python imports OK
+scripts/check_env.sh
 ```
+
+robodog 无 GitHub 访问，代码同步改用 rsync/bundle；`check_env.sh` 通过时输出
+`[gx-real] python imports OK`。
 
 若使用 SpaceMouse 辅助，再加：
 
@@ -117,10 +122,12 @@ scripts/check_env.sh --spacemouse
 确认确实在 Jetson 上，且 Python 是系统解释器：
 
 ```bash
-uname -m                       # 应为 aarch64
+uname -m
 which python3
-echo "${GX_REAL_PYTHON_BIN}"   # 应为 /usr/bin/python3
+echo "${GX_REAL_PYTHON_BIN}"
 ```
+
+`uname -m` 应为 `aarch64`，`GX_REAL_PYTHON_BIN` 应为 `/usr/bin/python3`。
 
 ### 3.2 Go2 网络与 ROS2 topic
 
@@ -128,10 +135,10 @@ echo "${GX_REAL_PYTHON_BIN}"   # 应为 /usr/bin/python3
 ip a
 ip route
 ros2 topic list
-timeout 8 ros2 topic list | grep camera   # 应有 front/wrist 两个 topic
-ros2 topic echo /lowstate --once
-ros2 topic echo /wirelesscontroller --once
-ros2 topic echo lf/sportmodestate --once
+timeout 8 ros2 topic list | grep camera
+timeout 5 ros2 topic echo /lowstate
+timeout 5 ros2 topic echo /wirelesscontroller
+timeout 5 ros2 topic echo lf/sportmodestate
 ```
 
 这些 topic 必须有数据；没有数据先修网络与 CycloneDDS，不要进入低层 rollout。
