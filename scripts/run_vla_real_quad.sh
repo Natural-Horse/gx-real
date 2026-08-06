@@ -71,30 +71,38 @@ preflight() {
 case "${ACTION}" in
   start)
     preflight
+
+    # 停掉旧的单会话节点，避免 CAN owner / 重复 WBC / 相机占用冲突
+    for legacy in vla_cams vla_leg vla_arm vla_client vla_decompress; do
+      if tmux has-session -t "${legacy}" 2>/dev/null; then
+        echo "[vla] 停止旧会话 ${legacy} ..."
+        tmux kill-session -t "${legacy}" 2>/dev/null || true
+      fi
+    done
+
     tmux kill-session -t "${SESSION}" 2>/dev/null || true
 
     # 左上：相机
     tmux new-session -d -s "${SESSION}" -n nodes \
       "cd ${ROOT} && source scripts/setup_env.sh && \
        python3 scripts/publish_real_cameras.py 2>&1 | tee logs/vla_cams.log"
+    # 节点退出后 pane 保留显示错误，便于排查
+    tmux set-option -t "${SESSION}" remain-on-exit on 2>/dev/null || true
     # 右上：腿部 WBC
-    tmux split-window -h -t "${SESSION}" \
+    tmux split-window -h -t "${SESSION}:0.0" \
       "cd ${ROOT} && source scripts/setup_env.sh && \
        bash scripts/run_vla_leg12_real.sh 2>&1 | tee logs/vla_leg.log"
     # 左下：X5 机械臂
-    tmux select-pane -t "${SESSION}:0.0"
-    tmux split-window -v -t "${SESSION}" \
+    tmux split-window -v -t "${SESSION}:0.0" \
       "cd ${ROOT} && source scripts/setup_env.sh && \
        bash scripts/run_vla_arm_real.sh 2>&1 | tee logs/vla_arm.log"
     # 右下：交互 client
-    tmux select-pane -t "${SESSION}:0.1"
-    tmux split-window -v -t "${SESSION}" \
+    tmux split-window -v -t "${SESSION}:0.1" \
       "cd ${ROOT} && source scripts/setup_env.sh && \
        python3 scripts/run_vla_real_interactive.py --config ${CONFIG_PATH} \
        2>&1 | tee logs/vla_client.log"
 
     tmux select-layout -t "${SESSION}" tiled
-    tmux select-pane -t "${SESSION}:0.0"
     echo "[vla] 已启动 ${SESSION}（2x2：cams / leg / arm / client）"
     echo "[vla] tmux attach -t ${SESSION} 查看；日志 logs/vla_{cams,leg,arm,client}.log"
     ;;
